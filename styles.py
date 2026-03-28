@@ -38,26 +38,26 @@ PREVIEW_STYLE = """
   code {
     font-family: 'Courier New', Courier, monospace;
     font-size: 0.88em;
-    background: #f4f4f4;
-    border: 1px solid #e0e0e0;
+    background: #e0e0e0;
+    border: 1px solid #ccc;
     border-radius: 3px;
     padding: 1px 5px;
+    color: #1a1a1a;
   }
 
   pre {
-    background: #f4f4f4;
-    border: 1px solid #e0e0e0;
-    border-radius: 4px;
-    padding: 12px 16px;
-    overflow-x: auto;
-    font-size: 0.88em;
-    line-height: 1.5;
+    margin: 1.5em 0;
+    white-space: pre-wrap;
   }
 
   pre code {
     background: none;
     border: none;
     padding: 0;
+    display: block;
+    line-height: inherit;
+    margin: 0;
+    border-radius: 0;
   }
 
   table {

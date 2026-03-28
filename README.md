@@ -25,7 +25,3 @@ pip install -r requirements.txt
 source .venv/bin/activate
 python main.py
 ```
-
-## Git
-
-The repository is initialized and initial commit is done.

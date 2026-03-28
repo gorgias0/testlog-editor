@@ -11,14 +11,14 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QSplitter,
     QTextEdit, QFileDialog, QTreeView,
     QFileSystemModel, QWidget, QVBoxLayout,
-    QPushButton, QHBoxLayout, QInputDialog
+    QPushButton, QHBoxLayout, QInputDialog,
+    QToolBar
 )
-from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl
+from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings
 from PySide6.QtGui import QImage, QAction, QPageLayout, QPageSize
 from PySide6.QtWebEngineWidgets import QWebEngineView
-import mistune
+from markdown_it import MarkdownIt
 from styles import PREVIEW_STYLE
-from config import Config
 
 
 class Editor(QTextEdit):
@@ -33,18 +33,208 @@ class Editor(QTextEdit):
         else:
             super().insertFromMimeData(source)
 
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Return and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            self._handle_smart_enter()
+            return
+        elif event.key() == Qt.Key.Key_Tab and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            self._handle_tab()
+            return
+        elif event.key() == Qt.Key.Key_Tab and event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
+            self._handle_shift_tab()
+            return
+        elif event.text() == '`':
+            self._handle_backtick()
+            return
+        elif event.key() == Qt.Key.Key_B and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            self.format_bold()
+            return
+        elif event.key() == Qt.Key.Key_I and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            self.format_italic()
+            return
+        elif event.key() == Qt.Key.Key_K and event.modifiers() == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+            self.format_code_block()
+            return
+        
+        super().keyPressEvent(event)
+
+    def _handle_smart_enter(self):
+        cursor = self.textCursor()
+        block = cursor.block()
+        line_text = block.text()
+        doc = self.document()
+        is_last_line = block.blockNumber() == doc.blockCount() - 1
+
+        # Check for bullet list
+        if re.match(r'^-\s+', line_text):
+            if line_text.strip() == '-':
+                # Empty list item, exit list mode
+                cursor.movePosition(cursor.MoveOperation.StartOfLine)
+                cursor.movePosition(cursor.MoveOperation.EndOfLine, cursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
+                self.setTextCursor(cursor)
+                if not is_last_line:
+                    cursor.insertText('\n')
+            else:
+                # Continue list
+                cursor.movePosition(cursor.MoveOperation.EndOfLine)
+                self.setTextCursor(cursor)
+                cursor.insertText('\n- ')
+            return
+
+        # Check for numbered list
+        match = re.match(r'^(\d+)\.\s+', line_text)
+        if match:
+            num = int(match.group(1))
+            if line_text.strip() == f'{num}.':
+                # Empty numbered item, exit list mode
+                cursor.movePosition(cursor.MoveOperation.StartOfLine)
+                cursor.movePosition(cursor.MoveOperation.EndOfLine, cursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
+                self.setTextCursor(cursor)
+                if not is_last_line:
+                    cursor.insertText('\n')
+            else:
+                # Continue numbered list
+                cursor.movePosition(cursor.MoveOperation.EndOfLine)
+                self.setTextCursor(cursor)
+                cursor.insertText(f'\n{num + 1}. ')
+            return
+
+        # Default behavior - use super with a synthetic Return key event
+        from PySide6.QtGui import QKeyEvent
+        event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
+        super().keyPressEvent(event)
+
+    def _handle_tab(self):
+        cursor = self.textCursor()
+        block = cursor.block()
+        line_text = block.text()
+
+        if line_text.startswith('- '):
+            # Indent list item
+            cursor.movePosition(cursor.MoveOperation.StartOfLine)
+            self.setTextCursor(cursor)
+            cursor.insertText('  ')
+        else:
+            # Default tab
+            cursor.insertText('    ')
+
+    def _handle_shift_tab(self):
+        cursor = self.textCursor()
+        block = cursor.block()
+        line_text = block.text()
+
+        # Remove up to 2 spaces from start of line
+        cursor.movePosition(cursor.MoveOperation.StartOfLine)
+        self.setTextCursor(cursor)
+        spaces_to_remove = 0
+        if line_text.startswith('  '):
+            spaces_to_remove = 2
+        elif line_text.startswith(' '):
+            spaces_to_remove = 1
+
+        for _ in range(spaces_to_remove):
+            cursor.deleteChar()
+
+    def format_bold(self):
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            text = cursor.selectedText()
+            cursor.removeSelectedText()
+            cursor.insertText(f'**{text}**')
+        else:
+            cursor.insertText('****')
+            cursor.movePosition(cursor.MoveOperation.Left, cursor.MoveMode.MoveAnchor, 2)
+            self.setTextCursor(cursor)
+
+    def format_italic(self):
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            text = cursor.selectedText()
+            cursor.removeSelectedText()
+            cursor.insertText(f'*{text}*')
+        else:
+            cursor.insertText('**')
+            cursor.movePosition(cursor.MoveOperation.Left, cursor.MoveMode.MoveAnchor, 1)
+            self.setTextCursor(cursor)
+
+    def format_inline_code(self):
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            text = cursor.selectedText()
+            cursor.removeSelectedText()
+            cursor.insertText(f'`{text}`')
+        else:
+            cursor.insertText('``')
+            cursor.movePosition(cursor.MoveOperation.Left, cursor.MoveMode.MoveAnchor, 1)
+            self.setTextCursor(cursor)
+
+    def _handle_backtick(self):
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            self.format_inline_code()
+        else:
+            # Insert single backtick
+            cursor.insertText('`')
+            self.setTextCursor(cursor)
+            
+            # Check if we now have three consecutive backticks
+            self._check_for_triple_backtick()
+
+    def _check_for_triple_backtick(self):
+        cursor = self.textCursor()
+        pos = cursor.positionInBlock()
+        block = cursor.block()
+        line_text = block.text()
+        
+        # Get the three characters before cursor
+        if pos >= 3:
+            before_text = line_text[max(0, pos - 3):pos]
+            if before_text == '```':
+                # Check if preceded by whitespace or at start of line
+                if pos == 3 or line_text[pos - 4].isspace():
+                    # Delete the three backticks
+                    cursor.movePosition(cursor.MoveOperation.Left, cursor.MoveMode.MoveAnchor, 3)
+                    cursor.movePosition(cursor.MoveOperation.Right, cursor.MoveMode.KeepAnchor, 3)
+                    cursor.removeSelectedText()
+                    self.setTextCursor(cursor)
+                    
+                    # Insert code block
+                    cursor.insertText('```\n\n```')
+                    cursor.movePosition(cursor.MoveOperation.Up)
+                    cursor.movePosition(cursor.MoveOperation.EndOfLine)
+                    self.setTextCursor(cursor)
+
+    def format_code_block(self):
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            text = cursor.selectedText()
+            cursor.removeSelectedText()
+            cursor.insertText(f'```\n{text}\n```')
+        else:
+            cursor.insertText('```\n\n```')
+            cursor.movePosition(cursor.MoveOperation.Up)
+            cursor.movePosition(cursor.MoveOperation.EndOfLine)
+            self.setTextCursor(cursor)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.settings = QSettings("TestLog Editor", "TestLog Editor")
         self.setWindowTitle("TestLog Editor")
         self.resize(1400, 800)
 
         self.current_file = None
         self.workspace_dir = None
+        self.md_parser = MarkdownIt().enable("table")
         self._new_session()
 
         self._setup_ui()
+        geometry = self.settings.value("geometry")
+        if geometry:
+            self.restoreGeometry(geometry)
         self._setup_menu()
         self._load_last_workspace()
 
@@ -54,8 +244,8 @@ class MainWindow(QMainWindow):
         os.makedirs(self.images_dir, exist_ok=True)
 
     def _load_last_workspace(self):
-        path = Config.load_last_workspace()
-        if path:
+        path = self.settings.value("last_workspace", "", type=str)
+        if path and os.path.isdir(path):
             self._set_workspace(path)
 
     def _set_workspace(self, path):
@@ -67,7 +257,7 @@ class MainWindow(QMainWindow):
             self.tree.update()
             self.setWindowTitle(f"TestLog Editor – {os.path.basename(path)}")
             self.statusBar().showMessage(f"Arbetsyta öppnad: {path}", 3000)
-            Config.save_last_workspace(path)
+            self.settings.setValue("last_workspace", path)
 
     def _setup_menu(self):
         menubar = self.menuBar()
@@ -114,9 +304,72 @@ class MainWindow(QMainWindow):
         file_menu.addAction(save_as_action)
         file_menu.addAction(export_pdf_action)
 
+        toolbar = QToolBar("Formatering")
+        toolbar.setMovable(False)
+        self.addToolBar(toolbar)
+
+        bold_action = QAction("B", self)
+        bold_action.setToolTip("Fetstil (Ctrl+B)")
+        bold_action.triggered.connect(self.editor.format_bold)
+        toolbar.addAction(bold_action)
+
+        italic_action = QAction("I", self)
+        italic_action.setToolTip("Kursiv (Ctrl+I)")
+        italic_action.triggered.connect(self.editor.format_italic)
+        toolbar.addAction(italic_action)
+
+        inline_code_action = QAction("****", self)
+        inline_code_action.setToolTip("Inline-kod (`)")
+        inline_code_action.triggered.connect(self.editor.format_inline_code)
+        toolbar.addAction(inline_code_action)
+
+        code_block_action = QAction("```", self)
+        code_block_action.setToolTip("Kodblock (Ctrl+Shift+K)")
+        code_block_action.triggered.connect(self.editor.format_code_block)
+        toolbar.addAction(code_block_action)
+
+        toolbar.addSeparator()
+
+        h1_action = QAction("H1", self)
+        h1_action.setToolTip("Rubrik 1")
+        h1_action.triggered.connect(lambda: self._insert_line_prefix("# "))
+        toolbar.addAction(h1_action)
+
+        h2_action = QAction("H2", self)
+        h2_action.setToolTip("Rubrik 2")
+        h2_action.triggered.connect(lambda: self._insert_line_prefix("## "))
+        toolbar.addAction(h2_action)
+
+        h3_action = QAction("H3", self)
+        h3_action.setToolTip("Rubrik 3")
+        h3_action.triggered.connect(lambda: self._insert_line_prefix("### "))
+        toolbar.addAction(h3_action)
+
+        toolbar.addSeparator()
+
+        bullet_action = QAction("-", self)
+        bullet_action.setToolTip("Lista")
+        bullet_action.triggered.connect(lambda: self._insert_line_prefix("- "))
+        toolbar.addAction(bullet_action)
+
+        numbered_action = QAction("1.", self)
+        numbered_action.setToolTip("Numrerad lista")
+        numbered_action.triggered.connect(lambda: self._insert_line_prefix("1. "))
+        toolbar.addAction(numbered_action)
+
+        quote_action = QAction('"', self)
+        quote_action.setToolTip("Blockquote")
+        quote_action.triggered.connect(lambda: self._insert_line_prefix("> "))
+        toolbar.addAction(quote_action)
+
+        hr_action = QAction("─", self)
+        hr_action.setToolTip("Horisontell linje")
+        hr_action.triggered.connect(self._insert_horizontal_rule)
+        toolbar.addAction(hr_action)
+
     def _setup_ui(self):
         # Yttre splitter: sidebar | höger
-        outer_splitter = QSplitter(Qt.Horizontal)
+        self.outer_splitter = QSplitter(Qt.Horizontal)
 
         # --- Sidebar ---
         sidebar = QWidget()
@@ -152,7 +405,7 @@ class MainWindow(QMainWindow):
         sidebar.setMaximumWidth(350)
 
         # --- Inre splitter: editor | preview ---
-        inner_splitter = QSplitter(Qt.Horizontal)
+        self.inner_splitter = QSplitter(Qt.Horizontal)
 
         self.editor = Editor(on_image_paste=self.handle_image_paste)
         self.editor.setPlaceholderText("Skriv Markdown här...")
@@ -161,16 +414,25 @@ class MainWindow(QMainWindow):
 
         self.preview = QTextEdit()
         self.preview.setReadOnly(True)
+        self.preview.document().setDocumentMargin(8)
 
-        inner_splitter.addWidget(self.editor)
-        inner_splitter.addWidget(self.preview)
-        inner_splitter.setSizes([550, 550])
+        self.inner_splitter.addWidget(self.editor)
+        self.inner_splitter.addWidget(self.preview)
+        self.inner_splitter.setSizes([550, 550])
 
-        outer_splitter.addWidget(sidebar)
-        outer_splitter.addWidget(inner_splitter)
-        outer_splitter.setSizes([220, 1100])
+        self.outer_splitter.addWidget(sidebar)
+        self.outer_splitter.addWidget(self.inner_splitter)
+        self.outer_splitter.setSizes([220, 1100])
 
-        self.setCentralWidget(outer_splitter)
+        self.setCentralWidget(self.outer_splitter)
+
+        outer_splitter_state = self.settings.value("outer_splitter")
+        if outer_splitter_state:
+            self.outer_splitter.restoreState(outer_splitter_state)
+
+        inner_splitter_state = self.settings.value("inner_splitter")
+        if inner_splitter_state:
+            self.inner_splitter.restoreState(inner_splitter_state)
 
         self.timer = QTimer()
         self.timer.setInterval(300)
@@ -182,6 +444,34 @@ class MainWindow(QMainWindow):
 
         self.editor.textChanged.connect(self.timer.start)
         self.editor.textChanged.connect(self.autosave_timer.start)
+
+    def closeEvent(self, event):
+        self.settings.setValue("geometry", self.saveGeometry())
+        self.settings.setValue("outer_splitter", self.outer_splitter.saveState())
+        self.settings.setValue("inner_splitter", self.inner_splitter.saveState())
+        super().closeEvent(event)
+
+    def _insert_line_prefix(self, prefix):
+        cursor = self.editor.textCursor()
+        cursor.beginEditBlock()
+        cursor.movePosition(cursor.MoveOperation.StartOfLine)
+        line_text = cursor.block().text()
+
+        if line_text.startswith(prefix):
+            for _ in range(len(prefix)):
+                cursor.deleteChar()
+        else:
+            cursor.insertText(prefix)
+
+        cursor.endEditBlock()
+        self.editor.setTextCursor(cursor)
+        self.editor.setFocus()
+
+    def _insert_horizontal_rule(self):
+        cursor = self.editor.textCursor()
+        cursor.insertText("\n---\n")
+        self.editor.setTextCursor(cursor)
+        self.editor.setFocus()
 
     def open_workspace(self):
         path = QFileDialog.getExistingDirectory(self, "Välj arbetsyta")
@@ -226,9 +516,7 @@ class MainWindow(QMainWindow):
 
     def update_preview(self):
         self.timer.stop()
-        md = self.editor.toPlainText()
-        md_for_preview = md.replace("](images/", f"]({self.images_dir}/")
-        html = PREVIEW_STYLE + mistune.html(md_for_preview)
+        html = self._build_preview_html()
         self.preview.setHtml(html)
 
     def autosave(self):
@@ -330,7 +618,33 @@ class MainWindow(QMainWindow):
     def _build_preview_html(self):
         md = self.editor.toPlainText()
         md_for_preview = md.replace("](images/", f"]({self.images_dir}/")
-        return PREVIEW_STYLE + mistune.html(md_for_preview)
+        rendered = self.md_parser.render(md_for_preview)
+        rendered = self._style_code_blocks(rendered)
+        return PREVIEW_STYLE + rendered
+
+    def _style_code_blocks(self, html):
+        """Wrap fenced code blocks in Qt-friendly markup with reliable padding."""
+        def replace_code_block(match):
+            code_content = match.group(1)
+            return (
+                '<table width="100%" cellspacing="0" cellpadding="0" '
+                'bgcolor="#e0e0e0" '
+                'style="margin: 1.5em 0; border: 1px solid #ccc;">'
+                '<tr><td bgcolor="#e0e0e0" style="padding: 14px 18px; color: #1a1a1a;">'
+                '<pre style="margin: 0; white-space: pre-wrap; '
+                'font-family: \'Courier New\', Courier, monospace; '
+                'font-size: 0.88em; line-height: 1.45; color: #1a1a1a;">'
+                f'{code_content}'
+                '</pre>'
+                '</td></tr></table>'
+            )
+
+        return re.sub(
+            r'<pre><code(?: class="[^"]*")?>(.*?)</code></pre>',
+            replace_code_block,
+            html,
+            flags=re.DOTALL,
+        )
 
     def export_pdf(self):
         """Export current document to PDF."""

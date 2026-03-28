@@ -1,0 +1,62 @@
+# AGENTS.md
+
+## Project Overview
+
+TestLog Editor is a small desktop Markdown editor built with PySide6. The main application lives in `main.py` and provides:
+
+- a workspace tree for `.testlog` files
+- a split editor/preview UI
+- autosave while a file is open
+- Markdown conveniences such as smart list continuation and code block helpers
+- image paste support for embedded markdown images
+
+## Repository Layout
+
+- `main.py`: application entrypoint and almost all UI/editor behavior
+- `styles.py`: HTML/CSS used by the preview pane
+- `files/test1.testlog`: sample content for manual testing
+- `README.md`: basic setup and run instructions
+
+## Run The App
+
+Use a virtual environment and launch the app directly:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python main.py
+```
+
+If `requirements.txt` is missing or outdated, infer the required packages from imports before changing setup docs. At minimum, the code currently depends on `PySide6` and `markdown-it-py`.
+
+## Working Conventions
+
+- Keep the app lightweight and local-first. There is no backend or service layer in this repo.
+- Preserve the current single-window desktop flow unless a task explicitly asks for a larger refactor.
+- Prefer small, targeted edits. `main.py` is currently monolithic, so avoid opportunistic rewrites.
+- When changing editor shortcuts or typing behavior, verify that normal text entry still works in the `Editor` subclass.
+- When changing preview rendering, keep `styles.py` and the markdown generation logic aligned.
+- When changing workspace handling or window layout, remember that `QSettings` persists the last workspace, geometry, and splitter state.
+
+## Manual Verification
+
+There is no automated test suite in this repository right now, so rely on focused manual checks:
+
+1. Launch `python main.py`.
+2. Open a workspace containing `.testlog` files.
+3. Edit a file and confirm autosave still works.
+4. Verify Markdown preview updates correctly.
+5. Smoke test editor helpers you touched, such as Enter, Tab, Shift+Tab, bold/italic, and pasted images.
+
+## File And State Side Effects
+
+- App state is written through `QSettings`.
+- Temporary session data is created under `/tmp/testlog_*`.
+- Sample documents may live inside the chosen workspace and should not be rewritten unless the task calls for it.
+
+## Notes For Future Agents
+
+- Check the current git diff before editing; this repo may have local work in progress.
+- Avoid deleting user files in the chosen workspace during testing.
+- If you add dependencies or commands, update both this file and `README.md`.
