@@ -41,3 +41,23 @@ The packaged app is written to `dist/TestLog Editor/`.
 The build is driven by `testlog_editor.spec`, so packaging tweaks should go there rather than expanding the shell command in `build.sh`.
 
 PyInstaller builds are platform-specific, so create the package on Windows for Windows, on macOS for macOS, and on Linux for Linux.
+
+## Linux Shortcut
+
+Install a desktop launcher on Linux:
+
+```bash
+./install-desktop-entry.sh source
+```
+
+That creates:
+
+```text
+~/.local/share/applications/testlog-editor.desktop
+```
+
+If you want the launcher to use the packaged Linux build instead:
+
+```bash
+./install-desktop-entry.sh package
+```

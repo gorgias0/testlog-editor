@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=TestLog Editor
+Comment=Markdown-based test log editor
+Exec=__EXEC__
+Path=__ROOT_DIR__
+Terminal=false
+Categories=Utility;Office;
+StartupNotify=true
