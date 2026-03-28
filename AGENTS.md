@@ -14,7 +14,9 @@ TestLog Editor is a small desktop Markdown editor built with PySide6. The main a
 
 - `main.py`: application entrypoint and almost all UI/editor behavior
 - `styles.py`: HTML/CSS used by the preview pane
-- `files/test1.testlog`: sample content for manual testing
+- `requirements.txt`: Python dependencies for running and packaging the app
+- `build.sh`: PyInstaller build script for local packaging
+- `testlog_editor.spec`: PyInstaller build definition
 - `README.md`: basic setup and run instructions
 
 ## Run The App
@@ -28,7 +30,19 @@ pip install -r requirements.txt
 python main.py
 ```
 
-If `requirements.txt` is missing or outdated, infer the required packages from imports before changing setup docs. At minimum, the code currently depends on `PySide6` and `markdown-it-py`.
+The project currently depends on `PySide6`, `markdown-it-py`, and `pyinstaller`.
+
+## Packaging
+
+Create distributable builds with:
+
+```bash
+source .venv/bin/activate
+./build.sh
+```
+
+PyInstaller outputs the packaged app in `dist/TestLog Editor/`. Builds are platform-specific.
+Prefer updating `testlog_editor.spec` when packaging needs to change.
 
 ## Working Conventions
 

@@ -895,7 +895,7 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.update_preview)
 
         self.autosave_timer = QTimer()
-        self.autosave_timer.setInterval(5000)
+        self.autosave_timer.setInterval(3000)
         self.autosave_timer.timeout.connect(self.autosave)
 
         self.editor.textChanged.connect(self.timer.start)
