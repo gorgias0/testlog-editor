@@ -3,41 +3,50 @@
 PREVIEW_STYLE = """
 <style>
   body {
-    font-family: Georgia, 'Times New Roman', serif;
-    font-size: 15px;
-    line-height: 1.7;
+    font-family: 'Source Sans 3', 'Noto Sans', Arial, sans-serif;
+    font-size: 17px;
+    line-height: 1.34;
     color: #1a1a1a;
     max-width: 800px;
     margin: 0 auto;
     padding: 24px 32px;
   }
 
+  p, li, td, th, blockquote {
+    font-family: 'Source Sans 3', 'Noto Sans', Arial, sans-serif;
+    font-size: 17px;
+    line-height: 1.34;
+  }
+
   h1, h2, h3, h4 {
-    font-family: system-ui, sans-serif;
-    font-weight: 600;
+    font-family: 'Source Sans 3', 'Noto Sans', Arial, sans-serif;
+    font-weight: 700;
     margin-top: 1.6em;
     margin-bottom: 0.4em;
     color: #2563eb;
   }
 
   h1 { 
-    font-size: 1.8em; 
+    font-size: 14px; 
     padding-bottom: 0.3em; 
   }
   h2 { 
-    font-size: 1.4em; 
+    font-size: 13px; 
     padding-bottom: 0.2em; 
   }
   h3 { 
-    font-size: 1.15em;
+    font-size: 12px;
     padding-bottom: 0.1em;
+  }
+  h4 {
+    font-size: 12px;
   }
 
   p { margin: 0.8em 0; }
 
   code {
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 0.88em;
+    font-family: 'IBM Plex Mono', Consolas, 'Courier New', monospace;
+    font-size: 1em;
     background: #e0e0e0;
     border: 1px solid #ccc;
     border-radius: 3px;
@@ -64,7 +73,7 @@ PREVIEW_STYLE = """
     border-collapse: collapse;
     width: 100%;
     margin: 1em 0;
-    font-size: 0.95em;
+    font-size: 1em;
   }
 
   th, td {
