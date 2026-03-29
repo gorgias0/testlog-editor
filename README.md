@@ -55,7 +55,7 @@ python -m pip install pyinstaller
 python -m PyInstaller --noconfirm testlog.spec
 ```
 
-`testlog.spec` is configured for a fast-starting `--onedir` Windows build with `console=False`. It excludes a set of unused standard-library modules and unused `PySide6` Qt modules to keep the shipped folder smaller and avoid one-file extraction startup overhead.
+`testlog.spec` is configured for a fast-starting `--onedir` Windows build with `console=False`. It excludes a set of unused standard-library modules and unused `PySide6` Qt modules to keep the shipped folder smaller and avoid one-file extraction startup overhead, while keeping `PySide6.QtSvg` available for Windows builds that need it at runtime.
 
 To distribute the Windows build, share the full `dist/TestLog Editor/` folder, usually as a zip archive, or package that folder with an installer such as Inno Setup.
 

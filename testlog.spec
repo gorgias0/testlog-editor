@@ -22,7 +22,6 @@ EXCLUDED_QT_MODULES = [
     "PySide6.QtSensors",
     "PySide6.QtSerialPort",
     "PySide6.QtSql",
-    "PySide6.QtSvg",
     "PySide6.QtTest",
     "PySide6.QtTextToSpeech",
     "PySide6.QtXml",
