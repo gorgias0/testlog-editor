@@ -5,7 +5,7 @@ import zipfile
 import shutil
 import re
 import base64
-from urllib.parse import quote
+from urllib.parse import unquote
 from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QSplitter,
@@ -15,9 +15,11 @@ from PySide6.QtWidgets import (
     QToolBar, QDialog, QStatusBar, QLabel,
     QListWidget, QListWidgetItem, QMenu, QMessageBox
 )
-from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate
-from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont
+from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QObject, Slot
+from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QKeySequence
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEnginePage
+from PySide6.QtWebChannel import QWebChannel
 from markdown_it import MarkdownIt
 from styles import PREVIEW_STYLE
 
@@ -26,6 +28,7 @@ TRANSLATIONS = {
         "File": "Arkiv",
         "Edit": "Redigera",
         "Format": "Format",
+        "View": "Visa",
         "Language": "Språk",
         "New": "Ny",
         "Open...": "Öppna...",
@@ -106,6 +109,13 @@ TRANSLATIONS = {
         "Delete {filename}? This cannot be undone.": "Ta bort {filename}? Detta går inte att ångra.",
         "Confirm Delete": "Bekräfta borttagning",
         "Move Item": "Flytta objekt",
+        "Image copied": "Bild kopierad",
+        "Copy": "Kopiera",
+        "Copy Image": "Kopiera bild",
+        "Copied": "✓ Kopierat",
+        "Editor Font Size": "Editorstorlek",
+        "Light Mode": "Ljust läge",
+        "Dark Mode": "Mörkt läge",
     }
 }
 
@@ -131,10 +141,23 @@ class Editor(QTextEdit):
         super().__init__()
         self.on_image_paste = on_image_paste
 
+    def _capture_view_state(self):
+        return (
+            self.verticalScrollBar().value(),
+            self.horizontalScrollBar().value(),
+        )
+
+    def _restore_view_state(self, view_state):
+        vertical_value, horizontal_value = view_state
+        self.verticalScrollBar().setValue(vertical_value)
+        self.horizontalScrollBar().setValue(horizontal_value)
+
     def insertFromMimeData(self, source):
         if source.hasImage():
             image = QImage(source.imageData())
             self.on_image_paste(image)
+        elif source.hasText():
+            self.insertPlainText(source.text())
         else:
             super().insertFromMimeData(source)
 
@@ -371,6 +394,7 @@ class Editor(QTextEdit):
         line_text, (start_pos, end_pos) = self._selected_line_range()
         QApplication.clipboard().setText(line_text)
 
+        view_state = self._capture_view_state()
         cursor = self.textCursor()
         cursor.beginEditBlock()
         cursor.setPosition(start_pos)
@@ -378,6 +402,7 @@ class Editor(QTextEdit):
         cursor.removeSelectedText()
         cursor.endEditBlock()
         self.setTextCursor(cursor)
+        self._restore_view_state(view_state)
 
     def move_lines_up(self):
         self._move_selected_lines(-1)
@@ -387,6 +412,7 @@ class Editor(QTextEdit):
 
     def duplicate_lines_down(self):
         text, (_, end_pos) = self._selected_line_range()
+        view_state = self._capture_view_state()
         cursor = self.textCursor()
         cursor.beginEditBlock()
         cursor.setPosition(end_pos)
@@ -405,6 +431,7 @@ class Editor(QTextEdit):
         new_cursor.setPosition(new_start + len(text), new_cursor.MoveMode.KeepAnchor)
         self.setTextCursor(new_cursor)
         cursor.endEditBlock()
+        self._restore_view_state(view_state)
 
     def _selected_line_range(self):
         cursor = self.textCursor()
@@ -437,6 +464,7 @@ class Editor(QTextEdit):
     def _move_selected_lines(self, direction):
         text, (start_pos, end_pos) = self._selected_line_range()
         doc = self.document()
+        view_state = self._capture_view_state()
 
         start_block = doc.findBlock(start_pos)
         end_lookup_pos = max(start_pos, end_pos - 1)
@@ -486,6 +514,7 @@ class Editor(QTextEdit):
         self.setTextCursor(new_cursor)
 
         cursor.endEditBlock()
+        self._restore_view_state(view_state)
 
 
 class TextToolDialog(QDialog):
@@ -554,11 +583,32 @@ class TextToolDialog(QDialog):
         QApplication.clipboard().setText(self.text_area.toPlainText())
 
 
+class PreviewPage(QWebEnginePage):
+    def __init__(self, image_copy_handler, parent=None):
+        super().__init__(parent)
+        self._image_copy_handler = image_copy_handler
+
+    def acceptNavigationRequest(self, url, nav_type, is_main_frame):
+        return super().acceptNavigationRequest(url, nav_type, is_main_frame)
+
+
+class PreviewBridge(QObject):
+    def __init__(self, copy_text_handler, parent=None):
+        super().__init__(parent)
+        self._copy_text_handler = copy_text_handler
+
+    @Slot(str)
+    def copyText(self, text):
+        self._copy_text_handler(text)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.settings = QSettings("TestLog Editor", "TestLog Editor")
         self.current_language = self.settings.value("language", self._default_language(), type=str)
+        self.editor_font_size = int(self.settings.value("editor_font_size", 12))
+        self.theme_mode = self.settings.value("theme_mode", "light", type=str)
         self.setWindowTitle("TestLog Editor")
         self.resize(1400, 800)
 
@@ -568,6 +618,7 @@ class MainWindow(QMainWindow):
         self.pinned_files = self._load_pinned_files()
         self.pinned_paths = set(self.pinned_files)
         self._syncing_scrollbars = False
+        self._pending_preview_scroll_ratio = 0.0
         self.md_parser = MarkdownIt().enable("table")
         self._new_session()
 
@@ -578,6 +629,7 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geometry)
         self._setup_menu()
         self._setup_toolbar()
+        self._apply_theme()
         self._retranslate_ui()
         self._load_last_workspace()
 
@@ -619,6 +671,75 @@ class MainWindow(QMainWindow):
     def _save_pinned_files(self):
         self.settings.setValue("pinned_files", self.pinned_files)
 
+    def _apply_editor_font(self):
+        if not hasattr(self, "editor"):
+            return
+        font = QFont("Monospace")
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setPointSize(self.editor_font_size)
+        self.editor.setFont(font)
+
+    def _set_editor_font_size(self, size):
+        if size == self.editor_font_size:
+            return
+        self.editor_font_size = size
+        self.settings.setValue("editor_font_size", size)
+        self._apply_editor_font()
+        self._retranslate_ui()
+
+    def _set_theme_mode(self, mode):
+        if mode == self.theme_mode:
+            return
+        self.theme_mode = mode
+        self.settings.setValue("theme_mode", mode)
+        self._apply_theme()
+        self.update_preview()
+        self._retranslate_ui()
+
+    def _apply_theme(self):
+        if self.theme_mode == "dark":
+            self.setStyleSheet(
+                """
+                QMainWindow, QWidget { background: #1f232a; color: #e6edf3; }
+                QMenuBar, QMenuBar::item, QMenu, QStatusBar, QToolBar {
+                    background: #22272e; color: #e6edf3;
+                }
+                QMenu::item:selected, QMenuBar::item:selected {
+                    background: #2d333b;
+                }
+                QTextEdit, QTreeView, QListWidget {
+                    background: #22272e;
+                    color: #e6edf3;
+                    border: 1px solid #444c56;
+                }
+                QPushButton {
+                    background: #2d333b;
+                    color: #e6edf3;
+                    border: 1px solid #444c56;
+                    padding: 4px 8px;
+                }
+                QPushButton:hover { background: #373e47; }
+                """
+            )
+            if hasattr(self, "editor"):
+                self.editor.setStyleSheet(
+                    "background: #22272e; color: #e6edf3; border: 1px solid #444c56;"
+                )
+        else:
+            self.setStyleSheet("")
+            if hasattr(self, "editor"):
+                self.editor.setStyleSheet("background: white; color: black;")
+            if hasattr(self, "tree"):
+                self.tree.setStyleSheet("")
+            if hasattr(self, "pinned_list"):
+                self.pinned_list.setStyleSheet("")
+            if hasattr(self, "btn_new_file"):
+                self.btn_new_file.setStyleSheet("")
+            if hasattr(self, "btn_new_folder"):
+                self.btn_new_folder.setStyleSheet("")
+            if hasattr(self, "btn_text_tool"):
+                self.btn_text_tool.setStyleSheet("")
+
     def _set_workspace(self, path):
         self.workspace_dir = path
         self.fs_model.setRootPath(path)
@@ -636,6 +757,7 @@ class MainWindow(QMainWindow):
         self.file_menu = menubar.addMenu("")
         self.edit_menu = menubar.addMenu("")
         self.format_menu = menubar.addMenu("")
+        self.view_menu = menubar.addMenu("")
         self.language_menu = menubar.addMenu("")
 
         self.new_action = QAction(self)
@@ -653,10 +775,8 @@ class MainWindow(QMainWindow):
         self.redo_action.setShortcut("Ctrl+Y")
         self.redo_action.triggered.connect(self.editor.redo)
         self.copy_line_action = QAction(self)
-        self.copy_line_action.setShortcut("Ctrl+C")
         self.copy_line_action.triggered.connect(self.editor.copy_line)
         self.cut_line_action = QAction(self)
-        self.cut_line_action.setShortcut("Ctrl+X")
         self.cut_line_action.triggered.connect(self.editor.cut_line)
         self.duplicate_lines_action = QAction(self)
         self.duplicate_lines_action.setShortcut("Ctrl+Shift+D")
@@ -703,6 +823,29 @@ class MainWindow(QMainWindow):
         self.date_menu_action = QAction(self)
         self.date_menu_action.setShortcut("Ctrl+Alt+D")
         self.date_menu_action.triggered.connect(self.editor.insert_current_date)
+
+        self.font_size_menu = QMenu(self)
+        self.font_size_group = QActionGroup(self)
+        self.font_size_group.setExclusive(True)
+        self.font_size_actions = {}
+        for size in (10, 12, 14, 16, 18):
+            action = QAction(str(size), self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked=False, s=size: self._set_editor_font_size(s))
+            self.font_size_group.addAction(action)
+            self.font_size_menu.addAction(action)
+            self.font_size_actions[size] = action
+
+        self.light_mode_action = QAction(self)
+        self.light_mode_action.setCheckable(True)
+        self.light_mode_action.triggered.connect(lambda: self._set_theme_mode("light"))
+        self.dark_mode_action = QAction(self)
+        self.dark_mode_action.setCheckable(True)
+        self.dark_mode_action.triggered.connect(lambda: self._set_theme_mode("dark"))
+        self.theme_group = QActionGroup(self)
+        self.theme_group.setExclusive(True)
+        self.theme_group.addAction(self.light_mode_action)
+        self.theme_group.addAction(self.dark_mode_action)
 
         self.open_workspace_action = QAction(self)
         self.open_workspace_action.triggered.connect(self.open_workspace)
@@ -757,6 +900,11 @@ class MainWindow(QMainWindow):
         self.format_menu.addAction(self.horizontal_rule_action)
         self.format_menu.addSeparator()
         self.format_menu.addAction(self.date_menu_action)
+
+        self.view_menu.addMenu(self.font_size_menu)
+        self.view_menu.addSeparator()
+        self.view_menu.addAction(self.light_mode_action)
+        self.view_menu.addAction(self.dark_mode_action)
 
         self.language_action_group = QActionGroup(self)
         self.language_action_group.setExclusive(True)
@@ -850,6 +998,7 @@ class MainWindow(QMainWindow):
         self.file_menu.setTitle(self._tr("File"))
         self.edit_menu.setTitle(self._tr("Edit"))
         self.format_menu.setTitle(self._tr("Format"))
+        self.view_menu.setTitle(self._tr("View"))
         self.language_menu.setTitle(self._tr("Language"))
 
         self.new_action.setText(self._tr("New"))
@@ -882,6 +1031,13 @@ class MainWindow(QMainWindow):
         self.blockquote_action.setText(self._tr("Blockquote"))
         self.horizontal_rule_action.setText(self._tr("Horizontal Rule"))
         self.date_menu_action.setText(self._tr("Insert Date"))
+        self.font_size_menu.setTitle(self._tr("Editor Font Size"))
+        self.light_mode_action.setText(self._tr("Light Mode"))
+        self.dark_mode_action.setText(self._tr("Dark Mode"))
+        for size, action in self.font_size_actions.items():
+            action.setChecked(size == self.editor_font_size)
+        self.light_mode_action.setChecked(self.theme_mode == "light")
+        self.dark_mode_action.setChecked(self.theme_mode == "dark")
 
         self.english_action.setText(self._tr("English"))
         self.swedish_action.setText(self._tr("Swedish"))
@@ -993,13 +1149,24 @@ class MainWindow(QMainWindow):
 
         self.editor = Editor(on_image_paste=self.handle_image_paste)
         self.editor.setPlaceholderText("Skriv Markdown här...")
-        self.editor.setFontFamily("Monospace")
-        self.editor.setFontPointSize(12)
+        self._apply_editor_font()
 
-        self.preview = QTextEdit()
-        self.preview.setReadOnly(True)
-        self.preview.document().setDocumentMargin(8)
-        self.preview.setFont(QFont("Source Sans 3", 17))
+        self.preview = QWebEngineView()
+        self.preview.setPage(PreviewPage(self._copy_preview_image, self.preview))
+        self.preview_channel = QWebChannel(self.preview.page())
+        self.preview_bridge = PreviewBridge(self._copy_preview_text, self.preview)
+        self.preview_channel.registerObject("previewBridge", self.preview_bridge)
+        self.preview.page().setWebChannel(self.preview_channel)
+        self.preview.loadFinished.connect(self._on_preview_loaded)
+        self.preview.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.preview.customContextMenuRequested.connect(self._show_preview_context_menu)
+        self.preview_copy_action = QAction(self.preview)
+        self.preview_copy_action.setShortcut(QKeySequence.StandardKey.Copy)
+        self.preview_copy_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.preview_copy_action.triggered.connect(
+            lambda: self.preview.triggerPageAction(QWebEnginePage.WebAction.Copy)
+        )
+        self.preview.addAction(self.preview_copy_action)
 
         self.inner_splitter.addWidget(self.editor)
         self.inner_splitter.addWidget(self.preview)
@@ -1034,7 +1201,6 @@ class MainWindow(QMainWindow):
         self.editor.textChanged.connect(self._update_editor_counts)
         self.editor.cursorPositionChanged.connect(self._update_editor_counts)
         self.editor.verticalScrollBar().valueChanged.connect(self._sync_preview_scroll)
-        self.preview.verticalScrollBar().valueChanged.connect(self._sync_editor_scroll)
         self._update_editor_counts()
 
     def closeEvent(self, event):
@@ -1351,9 +1517,9 @@ class MainWindow(QMainWindow):
     def update_preview(self):
         self.timer.stop()
         editor_ratio = self._scroll_ratio(self.editor.verticalScrollBar())
-        html = self._build_preview_html()
-        self.preview.setHtml(html)
-        self._set_scroll_ratio(self.preview.verticalScrollBar(), editor_ratio)
+        self._pending_preview_scroll_ratio = editor_ratio
+        html = self._build_preview_html(interactive=True)
+        self.preview.setHtml(html, QUrl.fromLocalFile(self.session_dir + "/"))
 
     def _update_editor_counts(self):
         text = self.editor.toPlainText()
@@ -1374,24 +1540,10 @@ class MainWindow(QMainWindow):
         )
 
     def _sync_preview_scroll(self, value):
-        if self._syncing_scrollbars:
-            return
-        self._sync_scrollbars(self.editor.verticalScrollBar(), self.preview.verticalScrollBar(), value)
-
-    def _sync_editor_scroll(self, value):
-        if self._syncing_scrollbars:
-            return
-        self._sync_scrollbars(self.preview.verticalScrollBar(), self.editor.verticalScrollBar(), value)
-
-    def _sync_scrollbars(self, source_bar, target_bar, value):
-        source_max = source_bar.maximum()
+        source_max = self.editor.verticalScrollBar().maximum()
         ratio = 0.0 if source_max <= 0 else value / source_max
-
-        self._syncing_scrollbars = True
-        try:
-            self._set_scroll_ratio(target_bar, ratio)
-        finally:
-            self._syncing_scrollbars = False
+        self._pending_preview_scroll_ratio = ratio
+        self._set_preview_scroll_ratio(ratio)
 
     def _scroll_ratio(self, scrollbar):
         maximum = scrollbar.maximum()
@@ -1399,12 +1551,23 @@ class MainWindow(QMainWindow):
             return 0.0
         return scrollbar.value() / maximum
 
-    def _set_scroll_ratio(self, scrollbar, ratio):
-        maximum = scrollbar.maximum()
-        if maximum <= 0:
-            scrollbar.setValue(0)
-            return
-        scrollbar.setValue(round(maximum * max(0.0, min(1.0, ratio))))
+    def _on_preview_loaded(self, ok):
+        if ok:
+            self._set_preview_scroll_ratio(self._pending_preview_scroll_ratio)
+
+    def _set_preview_scroll_ratio(self, ratio):
+        clamped_ratio = max(0.0, min(1.0, ratio))
+        self.preview.page().runJavaScript(
+            """
+            (function(ratio) {
+              const scrollMax = Math.max(
+                0,
+                document.documentElement.scrollHeight - window.innerHeight
+              );
+              window.scrollTo(0, scrollMax * ratio);
+            })(%f);
+            """ % clamped_ratio
+        )
 
     def autosave(self):
         self.autosave_timer.stop()
@@ -1511,13 +1674,136 @@ class MainWindow(QMainWindow):
 
         return re.sub(r'src="([^"]+)"', replace_src, html)
 
-    def _build_preview_html(self):
+    def _build_preview_html(self, interactive=False):
         md = self.editor.toPlainText()
         md_for_preview = md.replace("](images/", f"]({self.images_dir}/")
         rendered = self.md_parser.render(md_for_preview)
         rendered = self._style_headings(rendered)
-        rendered = self._style_code_blocks(rendered)
-        return PREVIEW_STYLE + rendered
+        rendered = self._style_code_blocks(rendered, interactive=interactive)
+        html = PREVIEW_STYLE + self._preview_theme_assets() + rendered
+        if interactive:
+            html += self._preview_interaction_assets()
+        return html
+
+    def _preview_theme_assets(self):
+        if self.theme_mode == "dark":
+            return """
+<style>
+  body, p, li, td, th, blockquote { color: #e6edf3; background: #22272e; }
+  body { background: #22272e; }
+  code, .code-wrapper { background: #2d333b !important; color: #e6edf3 !important; border-color: #444c56 !important; }
+  th, tr:nth-child(even) { background: #2d333b; }
+  td, th { border-color: #444c56; }
+  blockquote { color: #adbac7; border-left-color: #768390; }
+  a { color: #6cb6ff; }
+</style>
+"""
+        return ""
+
+    def _preview_interaction_assets(self):
+        copy_label = self._tr("Copy")
+        copied_label = self._tr("Copied")
+        return f"""
+<style>
+  .code-wrapper {{
+    position: relative;
+    margin: 1.5em 0;
+    border: 1px solid #6b7280;
+    background: #4b5563;
+    border-radius: 4px;
+    padding: 14px 18px;
+  }}
+  .copy-btn {{
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    padding: 3px 10px;
+    font-size: 0.75em;
+    background: #6b7280;
+    color: #f8fafc;
+    border: 1px solid #9ca3af;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0.7;
+  }}
+  .copy-btn:hover {{ opacity: 1; }}
+</style>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {{
+    new QWebChannel(qt.webChannelTransport, function(channel) {{
+      window.previewBridge = channel.objects.previewBridge;
+
+      document.querySelectorAll('.copy-btn').forEach(function(btn) {{
+        btn.addEventListener('click', function() {{
+          var targetId = btn.getAttribute('data-copy-target');
+          var pre = document.getElementById(targetId);
+          if (!pre) return;
+          window.previewBridge.copyText(pre.innerText);
+          btn.textContent = {copied_label!r};
+          setTimeout(function() {{ btn.textContent = {copy_label!r}; }}, 2000);
+        }});
+      }});
+    }});
+  }});
+</script>
+"""
+
+    def _copy_preview_image(self, encoded_src):
+        src = unquote(encoded_src)
+        image = QImage()
+
+        if src.startswith("data:image/"):
+            try:
+                _, encoded_data = src.split(",", 1)
+                image.loadFromData(base64.b64decode(encoded_data))
+            except Exception:
+                return
+        else:
+            path = QUrl(src).toLocalFile() if src.startswith("file://") else src
+            if not image.load(path):
+                return
+
+        if image.isNull():
+            return
+
+        QApplication.clipboard().setImage(image)
+        self.statusBar().showMessage(self._tr("Image copied"), 2000)
+
+    def _copy_preview_text(self, text):
+        QApplication.clipboard().setText(text)
+
+    def _show_preview_context_menu(self, pos):
+        x = pos.x()
+        y = pos.y()
+        script = f"""
+        (function() {{
+          const el = document.elementFromPoint({x}, {y});
+          if (!el) return '';
+          if (el.tagName === 'IMG') return el.src || '';
+          let parent = el.parentElement;
+          while (parent) {{
+            if (parent.tagName === 'IMG') return parent.src || '';
+            parent = parent.parentElement;
+          }}
+          return '';
+        }})();
+        """
+        self.preview.page().runJavaScript(script, lambda src: self._handle_preview_context_result(src, pos))
+
+    def _handle_preview_context_result(self, src, pos):
+        menu = QMenu(self)
+        copy_text_action = menu.addAction(self._tr("Copy"))
+        copy_image_action = None
+        if src:
+            menu.addSeparator()
+            copy_image_action = menu.addAction(self._tr("Copy Image"))
+        chosen = menu.exec(self.preview.mapToGlobal(pos))
+
+        if chosen == copy_text_action:
+            self.preview.triggerPageAction(QWebEnginePage.WebAction.Copy)
+        elif chosen == copy_image_action:
+            self._copy_preview_image(src)
 
     def _style_headings(self, html):
         heading_styles = {
@@ -1540,21 +1826,33 @@ class MainWindow(QMainWindow):
             )
         return html
 
-    def _style_code_blocks(self, html):
+    def _style_code_blocks(self, html, interactive=False):
         """Wrap fenced code blocks in Qt-friendly markup with reliable padding."""
         def replace_code_block(match):
             code_content = match.group(1)
+            pre_id = f"code-block-{uuid.uuid4().hex}"
+            button_html = ""
+            wrapper_style = (
+                'margin: 1.5em 0; border: 1px solid #6b7280; '
+                'background: #4b5563; border-radius: 4px; padding: 14px 18px;'
+            )
+            if interactive:
+                button_html = (
+                    f'<button class="copy-btn" data-copy-target="{pre_id}" type="button">'
+                    f'{self._tr("Copy")}</button>'
+                )
+                wrapper_class = 'code-wrapper'
+            else:
+                wrapper_class = ''
             return (
-                '<table width="100%" cellspacing="0" cellpadding="0" '
-                'bgcolor="#e0e0e0" '
-                'style="margin: 1.5em 0; border: 1px solid #ccc;">'
-                '<tr><td bgcolor="#e0e0e0" style="padding: 14px 18px; color: #1a1a1a;">'
-                '<pre style="margin: 0; white-space: pre-wrap; '
+                f'<div class="{wrapper_class}" style="{wrapper_style}">'
+                f'{button_html}'
+                f'<pre id="{pre_id}" style="margin: 0; white-space: pre-wrap; '
                 'font-family: \'Courier New\', Courier, monospace; '
-                'font-size: 0.88em; line-height: 1.45; color: #1a1a1a;">'
+                'font-size: 0.88em; line-height: 1.45; color: #f8fafc;">'
                 f'{code_content}'
                 '</pre>'
-                '</td></tr></table>'
+                '</div>'
             )
 
         return re.sub(

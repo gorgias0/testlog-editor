@@ -47,11 +47,11 @@ PREVIEW_STYLE = """
   code {
     font-family: 'IBM Plex Mono', Consolas, 'Courier New', monospace;
     font-size: 1em;
-    background: #e0e0e0;
-    border: 1px solid #ccc;
+    background: #3a3f46;
+    border: 1px solid #4b5560;
     border-radius: 3px;
     padding: 1px 5px;
-    color: #1a1a1a;
+    color: #f5f7fa;
   }
 
   pre {
