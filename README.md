@@ -9,6 +9,7 @@ A small Markdown-based test log editor built with PySide6.
 - Undo/Redo via Edit menu
 - Last opened workspace is restored at startup
 - Paste images to embed in markdown
+- Clickable task list checkboxes in preview
 - Swedish and English UI support
 
 ## Install

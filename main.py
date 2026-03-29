@@ -13,15 +13,21 @@ from PySide6.QtWidgets import (
     QFileSystemModel, QWidget, QVBoxLayout,
     QPushButton, QHBoxLayout, QInputDialog,
     QToolBar, QDialog, QStatusBar, QLabel,
-    QListWidget, QListWidgetItem, QMenu, QMessageBox
+    QMenu, QMessageBox,
+    QToolButton
 )
-from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QObject, Slot
-from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QKeySequence
+from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QObject, Slot, QSortFilterProxyModel
+from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QKeySequence, QTextCursor
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebChannel import QWebChannel
 from markdown_it import MarkdownIt
 from styles import PREVIEW_STYLE
+
+try:
+    from mdit_py_plugins.tasklists import tasklists_plugin
+except ImportError:
+    tasklists_plugin = None
 
 TRANSLATIONS = {
     "sv": {
@@ -113,7 +119,7 @@ TRANSLATIONS = {
         "Copy": "Kopiera",
         "Copy Image": "Kopiera bild",
         "Copied": "✓ Kopierat",
-        "Editor Font Size": "Editorstorlek",
+        "Font Size": "Fontstorlek",
         "Light Mode": "Ljust läge",
         "Dark Mode": "Mörkt läge",
     }
@@ -134,6 +140,40 @@ class WorkspaceFileSystemModel(QFileSystemModel):
                     return f"📌 {name}"
                 return name
         return super().data(index, role)
+
+
+class WorkspaceSortProxyModel(QSortFilterProxyModel):
+    def __init__(self, source_model, pinned_paths=None, parent=None):
+        super().__init__(parent)
+        self._source_model = source_model
+        self.pinned_paths = pinned_paths if pinned_paths is not None else set()
+        self.setSourceModel(source_model)
+
+    def lessThan(self, left, right):
+        left_path = self._source_model.filePath(left)
+        right_path = self._source_model.filePath(right)
+
+        left_is_dir = self._source_model.isDir(left)
+        right_is_dir = self._source_model.isDir(right)
+        left_is_pinned_file = left_path in self.pinned_paths and not left_is_dir
+        right_is_pinned_file = right_path in self.pinned_paths and not right_is_dir
+
+        left_rank = self._sort_rank(left_is_pinned_file, left_is_dir)
+        right_rank = self._sort_rank(right_is_pinned_file, right_is_dir)
+        if left_rank != right_rank:
+            return left_rank < right_rank
+
+        left_name = Path(left_path).stem if left_path.endswith(".testlog") else self._source_model.fileName(left)
+        right_name = Path(right_path).stem if right_path.endswith(".testlog") else self._source_model.fileName(right)
+        return left_name.lower() < right_name.lower()
+
+    @staticmethod
+    def _sort_rank(is_pinned_file, is_dir):
+        if is_pinned_file:
+            return 0
+        if is_dir:
+            return 1
+        return 2
 
 
 class Editor(QTextEdit):
@@ -216,6 +256,21 @@ class Editor(QTextEdit):
         line_text = block.text()
         doc = self.document()
         is_last_line = block.blockNumber() == doc.blockCount() - 1
+
+        checkbox_match = re.match(r'^-\s+\[( |x|X)\](.*)$', line_text)
+        if checkbox_match:
+            if not checkbox_match.group(2).strip():
+                cursor.movePosition(cursor.MoveOperation.StartOfLine)
+                cursor.movePosition(cursor.MoveOperation.EndOfLine, cursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
+                self.setTextCursor(cursor)
+                if not is_last_line:
+                    cursor.insertText('\n')
+            else:
+                cursor.movePosition(cursor.MoveOperation.EndOfLine)
+                self.setTextCursor(cursor)
+                cursor.insertText('\n- [ ] ')
+            return
 
         # Check for bullet list
         if re.match(r'^-\s+', line_text):
@@ -527,14 +582,22 @@ class TextToolDialog(QDialog):
         self.toolbar = QToolBar()
         self.text_area = QTextEdit()
         self.status_bar = QStatusBar()
-        self.generate_lorem_action = QAction(self)
-        self.generate_lorem_action.triggered.connect(self._generate_lorem_text)
+        self.generate_lorem_button = QToolButton(self)
+        self.generate_lorem_button.clicked.connect(lambda: self._generate_lorem_text(5))
+        self.generate_lorem_menu = QMenu(self.generate_lorem_button)
+        for paragraph_count in (5, 10, 20, 30, 50, 100):
+            action = self.generate_lorem_menu.addAction(str(paragraph_count))
+            action.triggered.connect(
+                lambda checked=False, count=paragraph_count: self._generate_lorem_text(count)
+            )
+        self.generate_lorem_button.setMenu(self.generate_lorem_menu)
+        self.generate_lorem_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self.copy_all_action = QAction(self)
         self.copy_all_action.triggered.connect(self._copy_all_text)
         self.clear_action = QAction(self)
         self.clear_action.triggered.connect(self.text_area.clear)
 
-        self.toolbar.addAction(self.generate_lorem_action)
+        self.toolbar.addWidget(self.generate_lorem_button)
         self.toolbar.addAction(self.copy_all_action)
         self.toolbar.addAction(self.clear_action)
 
@@ -549,7 +612,8 @@ class TextToolDialog(QDialog):
     def retranslate_ui(self):
         self.setWindowTitle(self._tr("Text Tool"))
         self.text_area.setPlaceholderText(self._tr("Paste text here..."))
-        self.generate_lorem_action.setText(self._tr("Generate Lorem"))
+        self.generate_lorem_button.setText(self._tr("Generate Lorem"))
+        self.generate_lorem_button.setToolTip(self._tr("Generate Lorem"))
         self.copy_all_action.setText(self._tr("Copy All"))
         self.clear_action.setText(self._tr("Clear"))
         self._update_counts()
@@ -564,7 +628,7 @@ class TextToolDialog(QDialog):
             )
         )
 
-    def _generate_lorem_text(self):
+    def _generate_lorem_text(self, paragraph_count=5):
         paragraphs = [
             "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer posuere erat a ante venenatis dapibus posuere velit aliquet.",
             "Praesent commodo cursus magna, vel scelerisque nisl consectetur et. Donec sed odio dui.",
@@ -577,18 +641,31 @@ class TextToolDialog(QDialog):
             "Vivamus sagittis lacus vel augue laoreet rutrum faucibus dolor auctor. Integer posuere erat a ante venenatis dapibus.",
             "Cras justo odio, dapibus ac facilisis in, egestas eget quam. Donec ullamcorper nulla non metus auctor fringilla.",
         ]
-        self.text_area.setPlainText("START\n\n" + "\n\n".join(paragraphs) + "\n\nEND")
+        generated_paragraphs = [
+            paragraphs[index % len(paragraphs)]
+            for index in range(paragraph_count)
+        ]
+        self.text_area.setPlainText("START\n\n" + "\n\n".join(generated_paragraphs) + "\n\nEND")
 
     def _copy_all_text(self):
         QApplication.clipboard().setText(self.text_area.toPlainText())
 
 
 class PreviewPage(QWebEnginePage):
-    def __init__(self, image_copy_handler, parent=None):
+    def __init__(self, image_copy_handler, checkbox_toggle_handler, parent=None):
         super().__init__(parent)
         self._image_copy_handler = image_copy_handler
+        self._checkbox_toggle_handler = checkbox_toggle_handler
 
     def acceptNavigationRequest(self, url, nav_type, is_main_frame):
+        if url.scheme() == "togglecheck":
+            try:
+                index = int(url.host())
+                checked = url.path().lstrip("/") == "1"
+            except ValueError:
+                return False
+            self._checkbox_toggle_handler(index, checked)
+            return False
         return super().acceptNavigationRequest(url, nav_type, is_main_frame)
 
 
@@ -620,6 +697,8 @@ class MainWindow(QMainWindow):
         self._syncing_scrollbars = False
         self._pending_preview_scroll_ratio = 0.0
         self.md_parser = MarkdownIt().enable("table")
+        if tasklists_plugin is not None:
+            self.md_parser.use(tasklists_plugin)
         self._new_session()
 
         self._setup_ui()
@@ -731,8 +810,6 @@ class MainWindow(QMainWindow):
                 self.editor.setStyleSheet("background: white; color: black;")
             if hasattr(self, "tree"):
                 self.tree.setStyleSheet("")
-            if hasattr(self, "pinned_list"):
-                self.pinned_list.setStyleSheet("")
             if hasattr(self, "btn_new_file"):
                 self.btn_new_file.setStyleSheet("")
             if hasattr(self, "btn_new_folder"):
@@ -745,7 +822,7 @@ class MainWindow(QMainWindow):
         self.fs_model.setRootPath(path)
         root_index = self.fs_model.index(path)
         if root_index.isValid():
-            self.tree.setRootIndex(root_index)
+            self.tree.setRootIndex(self.fs_proxy_model.mapFromSource(root_index))
             self.tree.update()
             self.setWindowTitle(self._window_title(os.path.basename(path)))
             self.statusBar().showMessage(self._tr("Workspace opened: {path}").format(path=path), 3000)
@@ -813,8 +890,10 @@ class MainWindow(QMainWindow):
         self.heading4_action.setShortcut("Ctrl+4")
         self.heading4_action.triggered.connect(lambda: self._insert_line_prefix("#### "))
         self.bullet_list_action = QAction(self)
+        self.bullet_list_action.setShortcut("Ctrl+Shift+L")
         self.bullet_list_action.triggered.connect(lambda: self._insert_line_prefix("- "))
         self.numbered_list_action = QAction(self)
+        self.numbered_list_action.setShortcut("Ctrl+Shift+O")
         self.numbered_list_action.triggered.connect(lambda: self._insert_line_prefix("1. "))
         self.blockquote_action = QAction(self)
         self.blockquote_action.triggered.connect(lambda: self._insert_line_prefix("> "))
@@ -1031,7 +1110,7 @@ class MainWindow(QMainWindow):
         self.blockquote_action.setText(self._tr("Blockquote"))
         self.horizontal_rule_action.setText(self._tr("Horizontal Rule"))
         self.date_menu_action.setText(self._tr("Insert Date"))
-        self.font_size_menu.setTitle(self._tr("Editor Font Size"))
+        self.font_size_menu.setTitle(self._tr("Font Size"))
         self.light_mode_action.setText(self._tr("Light Mode"))
         self.dark_mode_action.setText(self._tr("Dark Mode"))
         for size, action in self.font_size_actions.items():
@@ -1049,7 +1128,7 @@ class MainWindow(QMainWindow):
         self.toolbar_bold_action.setToolTip(self._tr("Bold (Ctrl+B)"))
         self.toolbar_italic_action.setText("I")
         self.toolbar_italic_action.setToolTip(self._tr("Italic (Ctrl+I)"))
-        self.toolbar_underline_action.setText("UL")
+        self.toolbar_underline_action.setText("U")
         self.toolbar_underline_action.setToolTip(self._tr("Underline tooltip"))
         self.toolbar_inline_code_action.setText("****")
         self.toolbar_inline_code_action.setToolTip(self._tr("Inline code (`)"))
@@ -1063,7 +1142,7 @@ class MainWindow(QMainWindow):
         self.toolbar_h3_action.setToolTip(self._tr("Heading 3 (Ctrl+3)"))
         self.toolbar_h4_action.setText("H4")
         self.toolbar_h4_action.setToolTip(self._tr("Heading 4 (Ctrl+4)"))
-        self.toolbar_bullet_action.setText("-")
+        self.toolbar_bullet_action.setText("UL")
         self.toolbar_bullet_action.setToolTip(self._tr("Bullet List"))
         self.toolbar_numbered_action.setText("1.")
         self.toolbar_numbered_action.setToolTip(self._tr("Numbered List"))
@@ -1077,7 +1156,6 @@ class MainWindow(QMainWindow):
         self.btn_new_file.setText(self._tr("+ New File"))
         self.btn_new_folder.setText(self._tr("+ Folder"))
         self.btn_text_tool.setText(self._tr("Text Tool"))
-        self.pinned_label.setText(self._tr("Pinned Files"))
         self.editor.setPlaceholderText(self._tr("Write Markdown here..."))
         self._update_editor_counts()
         self.refresh_pinned()
@@ -1106,25 +1184,14 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.btn_new_folder)
         sidebar_layout.addLayout(btn_row)
 
-        self.pinned_section = QWidget()
-        pinned_layout = QVBoxLayout(self.pinned_section)
-        pinned_layout.setContentsMargins(0, 0, 0, 0)
-        pinned_layout.setSpacing(4)
-        self.pinned_label = QLabel()
-        self.pinned_list = QListWidget()
-        self.pinned_list.setMaximumHeight(110)
-        self.pinned_list.itemClicked.connect(self.pinned_item_clicked)
-        pinned_layout.addWidget(self.pinned_label)
-        pinned_layout.addWidget(self.pinned_list)
-        sidebar_layout.addWidget(self.pinned_section)
-
         self.fs_model = WorkspaceFileSystemModel(self.pinned_paths)
+        self.fs_proxy_model = WorkspaceSortProxyModel(self.fs_model, self.pinned_paths, self)
         self.fs_model.setNameFilters(["*.testlog"])
         self.fs_model.setNameFilterDisables(True)  # Visar mappar, gråar ut andra filer
         self.fs_model.setFilter(QDir.AllDirs | QDir.Files | QDir.NoDotAndDotDot)
 
         self.tree = QTreeView()
-        self.tree.setModel(self.fs_model)
+        self.tree.setModel(self.fs_proxy_model)
         self.tree.setHeaderHidden(True)
         self.tree.setSortingEnabled(True)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1132,7 +1199,7 @@ class MainWindow(QMainWindow):
         self.tree.hideColumn(1)
         self.tree.hideColumn(2)
         self.tree.hideColumn(3)
-        self.tree.sortByColumn(3, Qt.SortOrder.DescendingOrder)
+        self.tree.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self.tree.clicked.connect(self.tree_item_clicked)
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
         sidebar_layout.addWidget(self.tree)
@@ -1152,7 +1219,7 @@ class MainWindow(QMainWindow):
         self._apply_editor_font()
 
         self.preview = QWebEngineView()
-        self.preview.setPage(PreviewPage(self._copy_preview_image, self.preview))
+        self.preview.setPage(PreviewPage(self._copy_preview_image, self.toggle_checkbox_from_preview, self.preview))
         self.preview_channel = QWebChannel(self.preview.page())
         self.preview_bridge = PreviewBridge(self._copy_preview_text, self.preview)
         self.preview_channel.registerObject("previewBridge", self.preview_bridge)
@@ -1275,28 +1342,17 @@ class MainWindow(QMainWindow):
 
         self.pinned_paths.clear()
         self.pinned_paths.update(self.pinned_files)
-
-        self.pinned_list.clear()
-        for path in self.pinned_files:
-            item = QListWidgetItem(Path(path).stem)
-            item.setData(Qt.ItemDataRole.UserRole, path)
-            self.pinned_list.addItem(item)
-
-        has_pins = bool(self.pinned_files)
-        self.pinned_section.setVisible(has_pins)
-        self.fs_model.layoutChanged.emit()
-
-    def pinned_item_clicked(self, item):
-        path = item.data(Qt.ItemDataRole.UserRole)
-        if path and os.path.exists(path):
-            self.open_testlog(path)
+        self.fs_proxy_model.invalidate()
+        self.tree.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+        self.tree.viewport().update()
 
     def show_context_menu(self, pos):
         index = self.tree.indexAt(pos)
         if not index.isValid():
             return
 
-        path = self.fs_model.filePath(index)
+        source_index = self.fs_proxy_model.mapToSource(index)
+        path = self.fs_model.filePath(source_index)
         is_file = path.endswith(".testlog") and os.path.isfile(path)
         is_dir = os.path.isdir(path)
         if not is_file and not is_dir:
@@ -1408,7 +1464,8 @@ class MainWindow(QMainWindow):
         if not index.isValid():
             return self.workspace_dir or ""
 
-        path = self.fs_model.filePath(index)
+        source_index = self.fs_proxy_model.mapToSource(index)
+        path = self.fs_model.filePath(source_index)
         if os.path.isdir(path):
             return path
         return os.path.dirname(path) or self.workspace_dir or ""
@@ -1478,7 +1535,8 @@ class MainWindow(QMainWindow):
         os.makedirs(os.path.join(target_dir, name.strip()), exist_ok=True)
 
     def tree_item_clicked(self, index):
-        path = self.fs_model.filePath(index)
+        source_index = self.fs_proxy_model.mapToSource(index)
+        path = self.fs_model.filePath(source_index)
         if path.endswith(".testlog"):
             self.open_testlog(path)
 
@@ -1520,6 +1578,29 @@ class MainWindow(QMainWindow):
         self._pending_preview_scroll_ratio = editor_ratio
         html = self._build_preview_html(interactive=True)
         self.preview.setHtml(html, QUrl.fromLocalFile(self.session_dir + "/"))
+
+    def toggle_checkbox_from_preview(self, index, checked):
+        text = self.editor.toPlainText()
+        lines = text.split("\n")
+
+        checkbox_count = 0
+        for line_index, line in enumerate(lines):
+            match = re.match(r'^(\s*-\s+\[)( |x|X)(\].*)$', line)
+            if not match:
+                continue
+
+            if checkbox_count == index:
+                marker = "x" if checked else " "
+                lines[line_index] = f"{match.group(1)}{marker}{match.group(3)}"
+                cursor = self.editor.textCursor()
+                cursor.beginEditBlock()
+                cursor.select(QTextCursor.SelectionType.Document)
+                cursor.insertText("\n".join(lines))
+                cursor.endEditBlock()
+                self.editor.setTextCursor(cursor)
+                return
+
+            checkbox_count += 1
 
     def _update_editor_counts(self):
         text = self.editor.toPlainText()
@@ -1606,9 +1687,18 @@ class MainWindow(QMainWindow):
         self._select_file_in_tree(path)
 
     def _select_file_in_tree(self, path):
-        index = self.fs_model.index(path)
+        source_index = self.fs_model.index(path)
+        if not source_index.isValid():
+            return
+
+        index = self.fs_proxy_model.mapFromSource(source_index)
         if not index.isValid():
             return
+
+        parent = index.parent()
+        while parent.isValid():
+            self.tree.expand(parent)
+            parent = parent.parent()
 
         self.tree.setCurrentIndex(index)
         self.tree.scrollTo(index)
@@ -1674,19 +1764,39 @@ class MainWindow(QMainWindow):
 
         return re.sub(r'src="([^"]+)"', replace_src, html)
 
-    def _build_preview_html(self, interactive=False):
+    def _build_preview_html(self, interactive=False, theme_mode=None):
         md = self.editor.toPlainText()
         md_for_preview = md.replace("](images/", f"]({self.images_dir}/")
         rendered = self.md_parser.render(md_for_preview)
         rendered = self._style_headings(rendered)
         rendered = self._style_code_blocks(rendered, interactive=interactive)
-        html = PREVIEW_STYLE + self._preview_theme_assets() + rendered
+        html = PREVIEW_STYLE + self._preview_theme_assets(theme_mode=theme_mode) + rendered
         if interactive:
             html += self._preview_interaction_assets()
         return html
 
-    def _preview_theme_assets(self):
-        if self.theme_mode == "dark":
+    def _pdf_typography_assets(self):
+        return """
+<style>
+  body {
+    font-size: 15px;
+    line-height: 1.28;
+  }
+
+  p, li, td, th, blockquote {
+    font-size: 15px;
+    line-height: 1.28;
+  }
+
+  table {
+    font-size: 0.95em;
+  }
+</style>
+"""
+
+    def _preview_theme_assets(self, theme_mode=None):
+        active_theme = theme_mode or self.theme_mode
+        if active_theme == "dark":
             return """
 <style>
   body, p, li, td, th, blockquote { color: #e6edf3; background: #22272e; }
@@ -1727,6 +1837,17 @@ class MainWindow(QMainWindow):
     opacity: 0.7;
   }}
   .copy-btn:hover {{ opacity: 1; }}
+  input[type="checkbox"] {{
+    width: 1em;
+    height: 1em;
+    margin-right: 6px;
+    cursor: pointer;
+    accent-color: #0066cc;
+  }}
+  li:has(input[type="checkbox"]) {{
+    list-style: none;
+    margin-left: -1.5em;
+  }}
 </style>
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script>
@@ -1742,6 +1863,13 @@ class MainWindow(QMainWindow):
           window.previewBridge.copyText(pre.innerText);
           btn.textContent = {copied_label!r};
           setTimeout(function() {{ btn.textContent = {copy_label!r}; }}, 2000);
+        }});
+      }});
+
+      document.querySelectorAll('input[type="checkbox"]').forEach(function(cb, index) {{
+        cb.removeAttribute('disabled');
+        cb.addEventListener('change', function() {{
+          window.location.href = 'togglecheck://' + index + '/' + (cb.checked ? '1' : '0');
         }});
       }});
     }});
@@ -1874,7 +2002,7 @@ class MainWindow(QMainWindow):
         if not path.endswith(".pdf"):
             path += ".pdf"
 
-        html = self._build_preview_html()
+        html = self._build_preview_html(theme_mode="light") + self._pdf_typography_assets()
         html = self._embed_images_as_base64(html)
 
         self._pdf_path = path

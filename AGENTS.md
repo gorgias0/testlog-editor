@@ -32,7 +32,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-The project currently depends on `PySide6`, `markdown-it-py`, and `pyinstaller`.
+The project currently depends on `PySide6`, `markdown-it-py`, `mdit-py-plugins`, and `pyinstaller`.
 
 ## Packaging
 
