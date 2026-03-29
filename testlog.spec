@@ -31,11 +31,6 @@ EXCLUDED_QT_MODULES = [
 EXCLUDED_MODULES = [
     "tkinter",
     "unittest",
-    "email",
-    "html",
-    "http",
-    "urllib",
-    "xml",
     "pydoc",
     "doctest",
     "difflib",
