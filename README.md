@@ -36,6 +36,13 @@ source .venv/bin/activate
 ./build.sh
 ```
 
+On Windows with a Unix-like shell, activate the virtual environment with:
+
+```bash
+source .venv/Scripts/activate
+./build.sh
+```
+
 The packaged app is written to `dist/TestLog Editor/`.
 
 The build is driven by `testlog_editor.spec`, so packaging tweaks should go there rather than expanding the shell command in `build.sh`.

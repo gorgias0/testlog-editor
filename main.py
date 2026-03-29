@@ -12,7 +12,8 @@ from PySide6.QtWidgets import (
     QTextEdit, QFileDialog, QTreeView,
     QFileSystemModel, QWidget, QVBoxLayout,
     QPushButton, QHBoxLayout, QInputDialog,
-    QToolBar
+    QToolBar, QDialog, QStatusBar, QLabel,
+    QListWidget, QListWidgetItem, QMenu, QMessageBox
 )
 from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate
 from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont
@@ -87,16 +88,41 @@ TRANSLATIONS = {
         "TestLog Editor": "TestLog Editor",
         "English": "Engelska",
         "Swedish": "Svenska",
+        "Text Tool": "Textverktyg",
+        "Paste text here...": "Klistra in text här...",
+        "Characters: {with_ws} | Without whitespace: {without_ws}": "Tecken: {with_ws} | Utan blanksteg: {without_ws}",
+        "Editor Count: {with_ws} | No ws: {without_ws} | Selected: {sel_with_ws} | Selected no ws: {sel_without_ws}":
+            "Editor: {with_ws} | Utan blanksteg: {without_ws} | Markerat: {sel_with_ws} | Markerat utan blanksteg: {sel_without_ws}",
+        "Generate Lorem": "Generera Lorem",
+        "Copy All": "Kopiera allt",
+        "Clear": "Rensa",
+        "Pinned Files": "Fästa filer",
+        "Rename": "Byt namn",
+        "Delete": "Ta bort",
+        "Pin to Top": "Fäst högst upp",
+        "Unpin": "Ta bort fästning",
+        "Move To...": "Flytta till...",
+        "Delete Folder {filename}? This cannot be undone.": "Ta bort mappen {filename}? Detta går inte att ångra.",
+        "Delete {filename}? This cannot be undone.": "Ta bort {filename}? Detta går inte att ångra.",
+        "Confirm Delete": "Bekräfta borttagning",
+        "Move Item": "Flytta objekt",
     }
 }
 
 
 class WorkspaceFileSystemModel(QFileSystemModel):
+    def __init__(self, pinned_paths=None, parent=None):
+        super().__init__(parent)
+        self.pinned_paths = pinned_paths if pinned_paths is not None else set()
+
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.DisplayRole and index.column() == 0:
             path = self.filePath(index)
             if path.endswith(".testlog"):
-                return Path(path).stem
+                name = Path(path).stem
+                if path in self.pinned_paths:
+                    return f"📌 {name}"
+                return name
         return super().data(index, role)
 
 
@@ -462,6 +488,72 @@ class Editor(QTextEdit):
         cursor.endEditBlock()
 
 
+class TextToolDialog(QDialog):
+    def __init__(self, translate, parent=None):
+        super().__init__(parent)
+        self._tr = translate
+        self.resize(700, 500)
+
+        layout = QVBoxLayout(self)
+        self.toolbar = QToolBar()
+        self.text_area = QTextEdit()
+        self.status_bar = QStatusBar()
+        self.generate_lorem_action = QAction(self)
+        self.generate_lorem_action.triggered.connect(self._generate_lorem_text)
+        self.copy_all_action = QAction(self)
+        self.copy_all_action.triggered.connect(self._copy_all_text)
+        self.clear_action = QAction(self)
+        self.clear_action.triggered.connect(self.text_area.clear)
+
+        self.toolbar.addAction(self.generate_lorem_action)
+        self.toolbar.addAction(self.copy_all_action)
+        self.toolbar.addAction(self.clear_action)
+
+        layout.addWidget(self.toolbar)
+        layout.addWidget(self.text_area)
+        layout.addWidget(self.status_bar)
+
+        self.text_area.textChanged.connect(self._update_counts)
+        self.retranslate_ui()
+        self._update_counts()
+
+    def retranslate_ui(self):
+        self.setWindowTitle(self._tr("Text Tool"))
+        self.text_area.setPlaceholderText(self._tr("Paste text here..."))
+        self.generate_lorem_action.setText(self._tr("Generate Lorem"))
+        self.copy_all_action.setText(self._tr("Copy All"))
+        self.clear_action.setText(self._tr("Clear"))
+        self._update_counts()
+
+    def _update_counts(self):
+        text = self.text_area.toPlainText()
+        without_whitespace = "".join(ch for ch in text if not ch.isspace())
+        self.status_bar.showMessage(
+            self._tr("Characters: {with_ws} | Without whitespace: {without_ws}").format(
+                with_ws=len(text),
+                without_ws=len(without_whitespace),
+            )
+        )
+
+    def _generate_lorem_text(self):
+        paragraphs = [
+            "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer posuere erat a ante venenatis dapibus posuere velit aliquet.",
+            "Praesent commodo cursus magna, vel scelerisque nisl consectetur et. Donec sed odio dui.",
+            "Nullam id dolor id nibh ultricies vehicula ut id elit. Cras mattis consectetur purus sit amet fermentum.",
+            "Aenean lacinia bibendum nulla sed consectetur. Maecenas faucibus mollis interdum.",
+            "Vestibulum id ligula porta felis euismod semper. Sed posuere consectetur est at lobortis.",
+            "Etiam porta sem malesuada magna mollis euismod. Curabitur blandit tempus porttitor.",
+            "Morbi leo risus, porta ac consectetur ac, vestibulum at eros. Sed posuere consectetur est at lobortis.",
+            "Donec ullamcorper nulla non metus auctor fringilla. Nulla vitae elit libero, a pharetra augue.",
+            "Vivamus sagittis lacus vel augue laoreet rutrum faucibus dolor auctor. Integer posuere erat a ante venenatis dapibus.",
+            "Cras justo odio, dapibus ac facilisis in, egestas eget quam. Donec ullamcorper nulla non metus auctor fringilla.",
+        ]
+        self.text_area.setPlainText("START\n\n" + "\n\n".join(paragraphs) + "\n\nEND")
+
+    def _copy_all_text(self):
+        QApplication.clipboard().setText(self.text_area.toPlainText())
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -472,11 +564,15 @@ class MainWindow(QMainWindow):
 
         self.current_file = None
         self.workspace_dir = None
+        self.text_tool_dialog = None
+        self.pinned_files = self._load_pinned_files()
+        self.pinned_paths = set(self.pinned_files)
         self._syncing_scrollbars = False
         self.md_parser = MarkdownIt().enable("table")
         self._new_session()
 
         self._setup_ui()
+        self.refresh_pinned()
         geometry = self.settings.value("geometry")
         if geometry:
             self.restoreGeometry(geometry)
@@ -513,6 +609,15 @@ class MainWindow(QMainWindow):
         path = self.settings.value("last_workspace", "", type=str)
         if path and os.path.isdir(path):
             self._set_workspace(path)
+
+    def _load_pinned_files(self):
+        pinned = self.settings.value("pinned_files", [])
+        if isinstance(pinned, str):
+            pinned = [pinned]
+        return list(pinned or [])
+
+    def _save_pinned_files(self):
+        self.settings.setValue("pinned_files", self.pinned_files)
 
     def _set_workspace(self, path):
         self.workspace_dir = path
@@ -815,10 +920,16 @@ class MainWindow(QMainWindow):
 
         self.btn_new_file.setText(self._tr("+ New File"))
         self.btn_new_folder.setText(self._tr("+ Folder"))
+        self.btn_text_tool.setText(self._tr("Text Tool"))
+        self.pinned_label.setText(self._tr("Pinned Files"))
         self.editor.setPlaceholderText(self._tr("Write Markdown here..."))
+        self._update_editor_counts()
+        self.refresh_pinned()
 
         title_suffix = os.path.basename(self.current_file) if self.current_file else None
         self.setWindowTitle(self._window_title(title_suffix))
+        if hasattr(self, "text_tool_dialog") and self.text_tool_dialog is not None:
+            self.text_tool_dialog.retranslate_ui()
 
     def _setup_ui(self):
         # Yttre splitter: sidebar | höger
@@ -839,7 +950,19 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.btn_new_folder)
         sidebar_layout.addLayout(btn_row)
 
-        self.fs_model = WorkspaceFileSystemModel()
+        self.pinned_section = QWidget()
+        pinned_layout = QVBoxLayout(self.pinned_section)
+        pinned_layout.setContentsMargins(0, 0, 0, 0)
+        pinned_layout.setSpacing(4)
+        self.pinned_label = QLabel()
+        self.pinned_list = QListWidget()
+        self.pinned_list.setMaximumHeight(110)
+        self.pinned_list.itemClicked.connect(self.pinned_item_clicked)
+        pinned_layout.addWidget(self.pinned_label)
+        pinned_layout.addWidget(self.pinned_list)
+        sidebar_layout.addWidget(self.pinned_section)
+
+        self.fs_model = WorkspaceFileSystemModel(self.pinned_paths)
         self.fs_model.setNameFilters(["*.testlog"])
         self.fs_model.setNameFilterDisables(True)  # Visar mappar, gråar ut andra filer
         self.fs_model.setFilter(QDir.AllDirs | QDir.Files | QDir.NoDotAndDotDot)
@@ -848,13 +971,19 @@ class MainWindow(QMainWindow):
         self.tree.setModel(self.fs_model)
         self.tree.setHeaderHidden(True)
         self.tree.setSortingEnabled(True)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         # Dölj kolumner utom namn
         self.tree.hideColumn(1)
         self.tree.hideColumn(2)
         self.tree.hideColumn(3)
         self.tree.sortByColumn(3, Qt.SortOrder.DescendingOrder)
         self.tree.clicked.connect(self.tree_item_clicked)
+        self.tree.customContextMenuRequested.connect(self.show_context_menu)
         sidebar_layout.addWidget(self.tree)
+
+        self.btn_text_tool = QPushButton("Text Tool")
+        self.btn_text_tool.clicked.connect(self.open_text_tool)
+        sidebar_layout.addWidget(self.btn_text_tool)
 
         sidebar.setMinimumWidth(200)
         sidebar.setMaximumWidth(350)
@@ -881,6 +1010,8 @@ class MainWindow(QMainWindow):
         self.outer_splitter.setSizes([220, 1100])
 
         self.setCentralWidget(self.outer_splitter)
+        self.editor_count_label = QLabel()
+        self.statusBar().addPermanentWidget(self.editor_count_label)
 
         outer_splitter_state = self.settings.value("outer_splitter")
         if outer_splitter_state:
@@ -900,8 +1031,11 @@ class MainWindow(QMainWindow):
 
         self.editor.textChanged.connect(self.timer.start)
         self.editor.textChanged.connect(self.autosave_timer.start)
+        self.editor.textChanged.connect(self._update_editor_counts)
+        self.editor.cursorPositionChanged.connect(self._update_editor_counts)
         self.editor.verticalScrollBar().valueChanged.connect(self._sync_preview_scroll)
         self.preview.verticalScrollBar().valueChanged.connect(self._sync_editor_scroll)
+        self._update_editor_counts()
 
     def closeEvent(self, event):
         self.settings.setValue("geometry", self.saveGeometry())
@@ -960,6 +1094,199 @@ class MainWindow(QMainWindow):
             return
         self._set_workspace(path)
 
+    def open_text_tool(self):
+        if not hasattr(self, "text_tool_dialog") or self.text_tool_dialog is None:
+            self.text_tool_dialog = TextToolDialog(self._tr, self)
+        self.text_tool_dialog.show()
+        self.text_tool_dialog.raise_()
+        self.text_tool_dialog.activateWindow()
+
+    def refresh_pinned(self):
+        valid_paths = [path for path in self.pinned_files if os.path.exists(path)]
+        if valid_paths != self.pinned_files:
+            self.pinned_files = valid_paths
+            self._save_pinned_files()
+
+        self.pinned_paths.clear()
+        self.pinned_paths.update(self.pinned_files)
+
+        self.pinned_list.clear()
+        for path in self.pinned_files:
+            item = QListWidgetItem(Path(path).stem)
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            self.pinned_list.addItem(item)
+
+        has_pins = bool(self.pinned_files)
+        self.pinned_section.setVisible(has_pins)
+        self.fs_model.layoutChanged.emit()
+
+    def pinned_item_clicked(self, item):
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if path and os.path.exists(path):
+            self.open_testlog(path)
+
+    def show_context_menu(self, pos):
+        index = self.tree.indexAt(pos)
+        if not index.isValid():
+            return
+
+        path = self.fs_model.filePath(index)
+        is_file = path.endswith(".testlog") and os.path.isfile(path)
+        is_dir = os.path.isdir(path)
+        if not is_file and not is_dir:
+            return
+
+        menu = QMenu(self)
+
+        rename_action = menu.addAction(self._tr("Rename"))
+        delete_action = menu.addAction(self._tr("Delete"))
+        move_action = menu.addAction(self._tr("Move To..."))
+        if is_file:
+            menu.addSeparator()
+            pin_action = menu.addAction(self._tr("Unpin") if path in self.pinned_paths else self._tr("Pin to Top"))
+        else:
+            pin_action = None
+
+        chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
+        if chosen == rename_action:
+            self.rename_item(path)
+        elif chosen == delete_action:
+            self.delete_item(path)
+        elif chosen == move_action:
+            self.move_item(path)
+        elif chosen == pin_action:
+            self.toggle_pin(path)
+
+    def rename_item(self, path):
+        current_name = Path(path).name if os.path.isdir(path) else Path(path).stem
+        new_name, ok = QInputDialog.getText(
+            self,
+            self._tr("Rename"),
+            self._tr("Filename (without .testlog):"),
+            text=current_name,
+        )
+        if not ok or not new_name.strip():
+            return
+
+        new_path = os.path.join(
+            os.path.dirname(path),
+            new_name.strip() if os.path.isdir(path) else new_name.strip() + ".testlog",
+        )
+        if new_path == path:
+            return
+
+        os.rename(path, new_path)
+
+        self._update_tracked_paths(path, new_path)
+
+        self.refresh_pinned()
+        self._select_file_in_tree(new_path)
+
+    def delete_item(self, path):
+        filename = os.path.basename(path)
+        answer = QMessageBox.question(
+            self,
+            self._tr("Confirm Delete"),
+            self._tr(
+                "Delete Folder {filename}? This cannot be undone."
+                if os.path.isdir(path)
+                else "Delete {filename}? This cannot be undone."
+            ).format(filename=filename),
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
+
+        self._remove_tracked_paths(path)
+        if self.current_file is None:
+            self.editor.clear()
+            self.setWindowTitle(self._window_title())
+
+        self.refresh_pinned()
+
+    def move_item(self, path):
+        destination = QFileDialog.getExistingDirectory(
+            self,
+            self._tr("Move Item"),
+            self._selected_directory_for_new_items(),
+        )
+        if not destination:
+            return
+
+        new_path = os.path.join(destination, os.path.basename(path))
+        if os.path.abspath(new_path) == os.path.abspath(path):
+            return
+
+        os.rename(path, new_path)
+        self._update_tracked_paths(path, new_path)
+        self.refresh_pinned()
+        self._select_file_in_tree(new_path)
+
+    def toggle_pin(self, path):
+        if path in self.pinned_files:
+            self.pinned_files = [p for p in self.pinned_files if p != path]
+        else:
+            self.pinned_files.append(path)
+        self._save_pinned_files()
+        self.refresh_pinned()
+
+    def _selected_directory_for_new_items(self):
+        if not hasattr(self, "tree"):
+            return self.workspace_dir or ""
+
+        index = self.tree.currentIndex()
+        if not index.isValid():
+            return self.workspace_dir or ""
+
+        path = self.fs_model.filePath(index)
+        if os.path.isdir(path):
+            return path
+        return os.path.dirname(path) or self.workspace_dir or ""
+
+    def _update_tracked_paths(self, old_path, new_path):
+        old_abs = os.path.abspath(old_path)
+        new_abs = os.path.abspath(new_path)
+
+        updated_pins = []
+        changed = False
+        for pinned in self.pinned_files:
+            pinned_abs = os.path.abspath(pinned)
+            if pinned_abs == old_abs or pinned_abs.startswith(old_abs + os.sep):
+                suffix = pinned_abs[len(old_abs):]
+                updated_pins.append(new_abs + suffix)
+                changed = True
+            else:
+                updated_pins.append(pinned)
+        if changed:
+            self.pinned_files = updated_pins
+            self._save_pinned_files()
+
+        if self.current_file:
+            current_abs = os.path.abspath(self.current_file)
+            if current_abs == old_abs or current_abs.startswith(old_abs + os.sep):
+                suffix = current_abs[len(old_abs):]
+                self.current_file = new_abs + suffix
+                self.setWindowTitle(self._window_title(os.path.basename(self.current_file)))
+
+    def _remove_tracked_paths(self, deleted_path):
+        deleted_abs = os.path.abspath(deleted_path)
+        new_pins = [
+            p for p in self.pinned_files
+            if not (os.path.abspath(p) == deleted_abs or os.path.abspath(p).startswith(deleted_abs + os.sep))
+        ]
+        if new_pins != self.pinned_files:
+            self.pinned_files = new_pins
+            self._save_pinned_files()
+
+        if self.current_file:
+            current_abs = os.path.abspath(self.current_file)
+            if current_abs == deleted_abs or current_abs.startswith(deleted_abs + os.sep):
+                self.current_file = None
+
     def new_file_in_workspace(self):
         if not self.workspace_dir:
             QFileDialog.getExistingDirectory(self, self._tr("Select workspace first"))
@@ -967,10 +1294,11 @@ class MainWindow(QMainWindow):
         name, ok = QInputDialog.getText(self, self._tr("New file"), self._tr("Filename (without .testlog):"))
         if not ok or not name.strip():
             return
-        path = os.path.join(self.workspace_dir, name.strip() + ".testlog")
+        target_dir = self._selected_directory_for_new_items()
+        path = os.path.join(target_dir, name.strip() + ".testlog")
         self.current_file = path
         self._new_session()
-        self.editor.clear()
+        self.editor.setPlainText(f"# {name.strip()}\n")
         self.save_file()
         self.setWindowTitle(self._window_title(f"{name.strip()}.testlog"))
 
@@ -980,7 +1308,8 @@ class MainWindow(QMainWindow):
         name, ok = QInputDialog.getText(self, self._tr("New folder"), self._tr("Folder name:"))
         if not ok or not name.strip():
             return
-        os.makedirs(os.path.join(self.workspace_dir, name.strip()), exist_ok=True)
+        target_dir = self._selected_directory_for_new_items()
+        os.makedirs(os.path.join(target_dir, name.strip()), exist_ok=True)
 
     def tree_item_clicked(self, index):
         path = self.fs_model.filePath(index)
@@ -1025,6 +1354,24 @@ class MainWindow(QMainWindow):
         html = self._build_preview_html()
         self.preview.setHtml(html)
         self._set_scroll_ratio(self.preview.verticalScrollBar(), editor_ratio)
+
+    def _update_editor_counts(self):
+        text = self.editor.toPlainText()
+        text_without_whitespace = "".join(ch for ch in text if not ch.isspace())
+
+        selected_text = self.editor.textCursor().selectedText().replace("\u2029", "\n")
+        selected_without_whitespace = "".join(ch for ch in selected_text if not ch.isspace())
+
+        self.editor_count_label.setText(
+            self._tr(
+                "Editor Count: {with_ws} | No ws: {without_ws} | Selected: {sel_with_ws} | Selected no ws: {sel_without_ws}"
+            ).format(
+                with_ws=len(text),
+                without_ws=len(text_without_whitespace),
+                sel_with_ws=len(selected_text),
+                sel_without_ws=len(selected_without_whitespace),
+            )
+        )
 
     def _sync_preview_scroll(self, value):
         if self._syncing_scrollbars:
