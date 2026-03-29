@@ -1,11 +1,14 @@
 import sys
 import os
 import uuid
+import json
+import random
 import zipfile
 import shutil
 import re
 import base64
-from urllib.parse import unquote
+from datetime import date, timedelta
+from urllib.parse import quote as url_quote, unquote as url_unquote
 from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QSplitter,
@@ -14,10 +17,11 @@ from PySide6.QtWidgets import (
     QPushButton, QHBoxLayout, QInputDialog,
     QToolBar, QDialog, QStatusBar, QLabel,
     QMenu, QMessageBox,
-    QToolButton
+    QToolButton, QSpinBox, QFormLayout, QDialogButtonBox,
+    QMenuBar, QCheckBox, QLineEdit
 )
 from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QObject, Slot, QSortFilterProxyModel
-from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QKeySequence, QTextCursor
+from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QKeySequence, QTextCursor, QIntValidator
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebChannel import QWebChannel
@@ -99,12 +103,36 @@ TRANSLATIONS = {
         "Swedish": "Svenska",
         "Text Tool": "Textverktyg",
         "Paste text here...": "Klistra in text här...",
-        "Characters: {with_ws} | Without whitespace: {without_ws}": "Tecken: {with_ws} | Utan blanksteg: {without_ws}",
+        "Characters: {with_ws} | Without whitespace: {without_ws} | Cursor: {cursor_pos}": "Tecken: {with_ws} | Utan blanksteg: {without_ws} | Markör: {cursor_pos}",
         "Editor Count: {with_ws} | No ws: {without_ws} | Selected: {sel_with_ws} | Selected no ws: {sel_without_ws}":
             "Editor: {with_ws} | Utan blanksteg: {without_ws} | Markerat: {sel_with_ws} | Markerat utan blanksteg: {sel_without_ws}",
         "Generate Lorem": "Generera Lorem",
+        "Counter String": "Räknarsträng",
+        "Counter String Length": "Längd",
+        "Transform": "Transformera",
+        "Close": "Stäng",
+        "Base64 Encode": "Base64 →",
+        "Base64 Decode": "→ Base64",
+        "URL Encode": "URL →",
+        "URL Decode": "→ URL",
+        "Format JSON": "Formatera JSON",
+        "Invalid Base64": "Fel: ogiltig Base64-sträng",
+        "Invalid JSON: {error}": "Fel: ogiltig JSON – {error}",
+        "UUID": "UUID",
+        "Count": "Antal",
+        "Testdata": "Testdata",
+        "Special Characters": "Specialtecken",
+        "Insert Selected": "Infoga valda",
+        "Null and control characters": "Null och kontrolltecken (\\x00, \\t, \\r\\n, \\x1f)",
+        "Emoji": "Emoji (😀🔥💀🧪✅❌⚠️)",
+        "RTL text": "RTL-text (مرحبا, שלום, RTL override \\u202e)",
+        "Long Unicode strings": "Långa Unicode-strängar (Zalgo-text, kombinerade tecken)",
+        "SQL injection": "SQL injection (' OR '1'='1, '; DROP TABLE users; --, 1; SELECT * FROM users)",
+        "XSS": "XSS (<script>alert('xss')</script>, \"><img src=x onerror=alert(1)>, javascript:alert(1))",
+        "Format strings": "Formatsträngar (%s %d %n, {0} {{}}, ../../../../etc/passwd)",
         "Copy All": "Kopiera allt",
         "Clear": "Rensa",
+        "OK": "OK",
         "Pinned Files": "Fästa filer",
         "Rename": "Byt namn",
         "Delete": "Ta bort",
@@ -576,12 +604,74 @@ class TextToolDialog(QDialog):
     def __init__(self, translate, parent=None):
         super().__init__(parent)
         self._tr = translate
+        self.settings = QSettings("TestLog Editor", "TestLog Editor")
         self.resize(700, 500)
+        saved_size = self.settings.value("text_tool_size")
+        if saved_size:
+            self.resize(saved_size)
+        self._special_character_samples = [
+            (
+                "Null and control characters",
+                "Null och kontrolltecken",
+                ["\\x00", "\\t", "\\r\\n", "\\x1f"],
+            ),
+            (
+                "Emoji",
+                "Emoji",
+                ["😀", "🔥", "💀", "🧪", "✅", "❌", "⚠️"],
+            ),
+            (
+                "RTL text",
+                "RTL-text",
+                ["مرحبا", "שלום", "\u202eRTL override"],
+            ),
+            (
+                "Long Unicode strings",
+                "Långa Unicode-strängar",
+                ["Zalgo: H̷̳̄ȅ̸̬j̷̞̚ ̶̫̍v̵̳͗ä̷̻̀r̵̖͝l̷̟̕d̴̰̈́", "Kombinerade tecken: A\u0301 e\u0308 o\u030a n\u0303"],
+            ),
+            (
+                "SQL injection",
+                "SQL injection",
+                ["' OR '1'='1", "'; DROP TABLE users; --", "1; SELECT * FROM users"],
+            ),
+            (
+                "XSS",
+                "XSS",
+                ["<script>alert('xss')</script>", "\"><img src=x onerror=alert(1)>", "javascript:alert(1)"],
+            ),
+            (
+                "Format strings",
+                "Formatsträngar",
+                ["%s %d %n", "{0} {{}}", "../../../../etc/passwd"],
+            ),
+        ]
 
         layout = QVBoxLayout(self)
+        self.menu_bar = QMenuBar(self)
+        layout.setMenuBar(self.menu_bar)
         self.toolbar = QToolBar()
         self.text_area = QTextEdit()
+        text_area_font = QFont()
+        text_area_font.setFamilies(["Cascadia Code", "Source Code Pro", "Noto Sans Mono", "monospace"])
+        text_area_font.setStyleHint(QFont.StyleHint.Monospace)
+        text_area_font.setPointSize(12)
+        self.text_area.setFont(text_area_font)
         self.status_bar = QStatusBar()
+        self.file_menu = QMenu(self)
+        self.close_action = QAction(self)
+        self.close_action.triggered.connect(self.close)
+        self.transform_menu = QMenu(self)
+        self.base64_encode_action = QAction(self)
+        self.base64_encode_action.triggered.connect(self._transform_base64_encode)
+        self.base64_decode_action = QAction(self)
+        self.base64_decode_action.triggered.connect(self._transform_base64_decode)
+        self.url_encode_action = QAction(self)
+        self.url_encode_action.triggered.connect(self._transform_url_encode)
+        self.url_decode_action = QAction(self)
+        self.url_decode_action.triggered.connect(self._transform_url_decode)
+        self.format_json_action = QAction(self)
+        self.format_json_action.triggered.connect(self._transform_format_json)
         self.generate_lorem_button = QToolButton(self)
         self.generate_lorem_button.clicked.connect(lambda: self._generate_lorem_text(5))
         self.generate_lorem_menu = QMenu(self.generate_lorem_button)
@@ -592,12 +682,37 @@ class TextToolDialog(QDialog):
             )
         self.generate_lorem_button.setMenu(self.generate_lorem_menu)
         self.generate_lorem_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.counter_string_action = QAction(self)
+        self.counter_string_action.triggered.connect(self._show_counter_string_dialog)
+        self.uuid_action = QAction(self)
+        self.uuid_action.triggered.connect(self._show_uuid_dialog)
+        self.testdata_action = QAction(self)
+        self.testdata_action.triggered.connect(self._generate_testdata)
+        self.special_characters_action = QAction(self)
+        self.special_characters_action.triggered.connect(self._show_special_characters_dialog)
         self.copy_all_action = QAction(self)
         self.copy_all_action.triggered.connect(self._copy_all_text)
         self.clear_action = QAction(self)
         self.clear_action.triggered.connect(self.text_area.clear)
 
+        self.menu_bar.addMenu(self.file_menu)
+        self.file_menu.addAction(self.close_action)
+        self.menu_bar.addMenu(self.transform_menu)
+        self.transform_menu.addAction(self.base64_encode_action)
+        self.transform_menu.addAction(self.base64_decode_action)
+        self.transform_menu.addSeparator()
+        self.transform_menu.addAction(self.url_encode_action)
+        self.transform_menu.addAction(self.url_decode_action)
+        self.transform_menu.addSeparator()
+        self.transform_menu.addAction(self.format_json_action)
+
         self.toolbar.addWidget(self.generate_lorem_button)
+        self.toolbar.addAction(self.counter_string_action)
+        self.toolbar.addSeparator()
+        self.toolbar.addAction(self.uuid_action)
+        self.toolbar.addAction(self.testdata_action)
+        self.toolbar.addAction(self.special_characters_action)
+        self.toolbar.addSeparator()
         self.toolbar.addAction(self.copy_all_action)
         self.toolbar.addAction(self.clear_action)
 
@@ -606,14 +721,27 @@ class TextToolDialog(QDialog):
         layout.addWidget(self.status_bar)
 
         self.text_area.textChanged.connect(self._update_counts)
+        self.text_area.cursorPositionChanged.connect(self._update_counts)
         self.retranslate_ui()
         self._update_counts()
 
     def retranslate_ui(self):
         self.setWindowTitle(self._tr("Text Tool"))
         self.text_area.setPlaceholderText(self._tr("Paste text here..."))
+        self.file_menu.setTitle(self._tr("File"))
+        self.close_action.setText(self._tr("Close"))
+        self.transform_menu.setTitle(self._tr("Transform"))
+        self.base64_encode_action.setText(self._tr("Base64 Encode"))
+        self.base64_decode_action.setText(self._tr("Base64 Decode"))
+        self.url_encode_action.setText(self._tr("URL Encode"))
+        self.url_decode_action.setText(self._tr("URL Decode"))
+        self.format_json_action.setText(self._tr("Format JSON"))
         self.generate_lorem_button.setText(self._tr("Generate Lorem"))
         self.generate_lorem_button.setToolTip(self._tr("Generate Lorem"))
+        self.counter_string_action.setText(self._tr("Counter String"))
+        self.uuid_action.setText(self._tr("UUID"))
+        self.testdata_action.setText(self._tr("Testdata"))
+        self.special_characters_action.setText(self._tr("Special Characters"))
         self.copy_all_action.setText(self._tr("Copy All"))
         self.clear_action.setText(self._tr("Clear"))
         self._update_counts()
@@ -621,25 +749,27 @@ class TextToolDialog(QDialog):
     def _update_counts(self):
         text = self.text_area.toPlainText()
         without_whitespace = "".join(ch for ch in text if not ch.isspace())
+        cursor_pos = self.text_area.textCursor().position()
         self.status_bar.showMessage(
-            self._tr("Characters: {with_ws} | Without whitespace: {without_ws}").format(
+            self._tr("Characters: {with_ws} | Without whitespace: {without_ws} | Cursor: {cursor_pos}").format(
                 with_ws=len(text),
                 without_ws=len(without_whitespace),
+                cursor_pos=cursor_pos,
             )
         )
 
     def _generate_lorem_text(self, paragraph_count=5):
         paragraphs = [
-            "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer posuere erat a ante venenatis dapibus posuere velit aliquet.",
-            "Praesent commodo cursus magna, vel scelerisque nisl consectetur et. Donec sed odio dui.",
-            "Nullam id dolor id nibh ultricies vehicula ut id elit. Cras mattis consectetur purus sit amet fermentum.",
-            "Aenean lacinia bibendum nulla sed consectetur. Maecenas faucibus mollis interdum.",
-            "Vestibulum id ligula porta felis euismod semper. Sed posuere consectetur est at lobortis.",
-            "Etiam porta sem malesuada magna mollis euismod. Curabitur blandit tempus porttitor.",
-            "Morbi leo risus, porta ac consectetur ac, vestibulum at eros. Sed posuere consectetur est at lobortis.",
-            "Donec ullamcorper nulla non metus auctor fringilla. Nulla vitae elit libero, a pharetra augue.",
-            "Vivamus sagittis lacus vel augue laoreet rutrum faucibus dolor auctor. Integer posuere erat a ante venenatis dapibus.",
-            "Cras justo odio, dapibus ac facilisis in, egestas eget quam. Donec ullamcorper nulla non metus auctor fringilla.",
+            "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer posuere erat a ante venenatis dapibus posuere velit aliquet. Sed posuere consectetur est at lobortis. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer posuere erat a ante venenatis dapibus posuere velit aliquet. Sed posuere consectetur est at lobortis.",
+            "Praesent commodo cursus magna, vel scelerisque nisl consectetur et. Donec sed odio dui. Cras justo odio, dapibus ac facilisis in, egestas eget quam. Praesent commodo cursus magna, vel scelerisque nisl consectetur et. Donec sed odio dui. Cras justo odio, dapibus ac facilisis in, egestas eget quam.",
+            "Nullam id dolor id nibh ultricies vehicula ut id elit. Cras mattis consectetur purus sit amet fermentum. Vestibulum id ligula porta felis euismod semper. Nullam id dolor id nibh ultricies vehicula ut id elit. Cras mattis consectetur purus sit amet fermentum. Vestibulum id ligula porta felis euismod semper.",
+            "Aenean lacinia bibendum nulla sed consectetur. Maecenas faucibus mollis interdum. Vivamus sagittis lacus vel augue laoreet rutrum faucibus dolor auctor. Aenean lacinia bibendum nulla sed consectetur. Maecenas faucibus mollis interdum. Vivamus sagittis lacus vel augue laoreet rutrum faucibus dolor auctor.",
+            "Vestibulum id ligula porta felis euismod semper. Sed posuere consectetur est at lobortis. Donec ullamcorper nulla non metus auctor fringilla. Vestibulum id ligula porta felis euismod semper. Sed posuere consectetur est at lobortis. Donec ullamcorper nulla non metus auctor fringilla.",
+            "Etiam porta sem malesuada magna mollis euismod. Curabitur blandit tempus porttitor. Nulla vitae elit libero, a pharetra augue. Etiam porta sem malesuada magna mollis euismod. Curabitur blandit tempus porttitor. Nulla vitae elit libero, a pharetra augue.",
+            "Morbi leo risus, porta ac consectetur ac, vestibulum at eros. Sed posuere consectetur est at lobortis. Aenean lacinia bibendum nulla sed consectetur. Morbi leo risus, porta ac consectetur ac, vestibulum at eros. Sed posuere consectetur est at lobortis. Aenean lacinia bibendum nulla sed consectetur.",
+            "Donec ullamcorper nulla non metus auctor fringilla. Nulla vitae elit libero, a pharetra augue. Curabitur blandit tempus porttitor. Donec ullamcorper nulla non metus auctor fringilla. Nulla vitae elit libero, a pharetra augue. Curabitur blandit tempus porttitor.",
+            "Vivamus sagittis lacus vel augue laoreet rutrum faucibus dolor auctor. Integer posuere erat a ante venenatis dapibus. Maecenas faucibus mollis interdum. Vivamus sagittis lacus vel augue laoreet rutrum faucibus dolor auctor. Integer posuere erat a ante venenatis dapibus. Maecenas faucibus mollis interdum.",
+            "Cras justo odio, dapibus ac facilisis in, egestas eget quam. Donec ullamcorper nulla non metus auctor fringilla. Etiam porta sem malesuada magna mollis euismod. Cras justo odio, dapibus ac facilisis in, egestas eget quam. Donec ullamcorper nulla non metus auctor fringilla. Etiam porta sem malesuada magna mollis euismod.",
         ]
         generated_paragraphs = [
             paragraphs[index % len(paragraphs)]
@@ -647,8 +777,236 @@ class TextToolDialog(QDialog):
         ]
         self.text_area.setPlainText("START\n\n" + "\n\n".join(generated_paragraphs) + "\n\nEND")
 
+    def _show_counter_string_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self._tr("Counter String"))
+
+        layout = QVBoxLayout(dialog)
+        form_layout = QFormLayout()
+        length_input = QLineEdit(dialog)
+        length_input.setValidator(QIntValidator(1, 100000, length_input))
+        length_input.setPlaceholderText("100")
+        length_input.returnPressed.connect(dialog.accept)
+        form_layout.addRow(self._tr("Counter String Length"), length_input)
+        layout.addLayout(form_layout)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, parent=dialog)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(self._tr("OK"))
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            length = int(length_input.text()) if length_input.text() else 100
+            self._generate_counter_string(length)
+
+    def _show_uuid_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self._tr("UUID"))
+
+        layout = QVBoxLayout(dialog)
+        form_layout = QFormLayout()
+        count_spinbox = QSpinBox(dialog)
+        count_spinbox.setRange(1, 100)
+        count_spinbox.setValue(1)
+        form_layout.addRow(self._tr("Count"), count_spinbox)
+        layout.addLayout(form_layout)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, parent=dialog)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(self._tr("OK"))
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._generate_uuids(count_spinbox.value())
+
+    def _show_special_characters_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self._tr("Special Characters"))
+
+        layout = QVBoxLayout(dialog)
+        checkboxes = []
+        for key, _, _ in self._special_character_samples:
+            checkbox = QCheckBox(self._tr(key), dialog)
+            checkbox.setChecked(True)
+            layout.addWidget(checkbox)
+            checkboxes.append((key, checkbox))
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, parent=dialog)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(self._tr("Insert Selected"))
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            selected_keys = [key for key, checkbox in checkboxes if checkbox.isChecked()]
+            self._append_special_character_sections(selected_keys)
+
+    def _generate_counter_string(self, length):
+        result = ["*"] * length
+        i = length
+        while i > 0:
+            s = str(i)
+            pos = i - len(s) - 1
+            if pos >= 0:
+                result[pos:pos + len(s)] = list(s)
+                i = pos
+            else:
+                break
+        self.text_area.setPlainText("".join(result))
+
+    def _generate_uuids(self, count):
+        self.text_area.setPlainText("\n".join(str(uuid.uuid4()) for _ in range(count)))
+
+    def _generate_testdata(self):
+        first_name = random.choice([
+            "Erik", "Anna", "Sofia", "Johan", "Lina", "Karl", "Maja", "Oskar", "Elin", "Viktor",
+            "Åsa", "Älva", "Björn", "Örjan",
+        ])
+        last_name = random.choice([
+            "Lindström", "Svensson", "Bergman", "Holm", "Nyqvist", "Dahlgren", "Sandberg", "Ekman", "Söderlund", "Lindberg",
+        ])
+        street = random.choice([
+            "Storgatan", "Björkgatan", "Parkvägen", "Skolgatan", "Kungsgatan", "Ängsvägen", "Tallstigen", "Lindvägen",
+        ])
+        city, postal_code = random.choice([
+            ("Göteborg", "412 56"),
+            ("Stockholm", "118 62"),
+            ("Malmö", "214 36"),
+            ("Uppsala", "753 21"),
+            ("Västerås", "722 15"),
+            ("Örebro", "703 62"),
+            ("Linköping", "582 24"),
+            ("Lund", "223 55"),
+        ])
+        street_number = random.randint(3, 48)
+        personal_number = self._generate_personnummer()
+        email = f"{self._normalize_email_name(first_name)}.{self._normalize_email_name(last_name)}@example.com"
+        landline = self._generate_landline_number()
+        landline_intl = self._to_international_phone(landline)
+        mobile = self._generate_mobile_number()
+        mobile_intl = self._to_international_phone(mobile)
+        field_width = 18
+        rows = [
+            ("Namn:", f"{first_name} {last_name}"),
+            ("Adress:", f"{street} {street_number}, {postal_code} {city}"),
+            ("Personnummer:", personal_number),
+            ("E-post:", email),
+            ("Telefon:", landline),
+            ("Telefon +46:", landline_intl),
+            ("Mobil:", mobile),
+            ("Mobil +46:", mobile_intl),
+        ]
+
+        self.text_area.setPlainText(
+            "\n".join(f"{label:<{field_width}}{value}" for label, value in rows)
+        )
+
+    def _append_special_character_sections(self, selected_keys):
+        sections = []
+        for key, section_label, samples in self._special_character_samples:
+            if key not in selected_keys:
+                continue
+            body = "\n".join(samples)
+            sections.append(f"=== {section_label} ===\n{body}")
+        if sections:
+            self._append_to_text_area("\n\n".join(sections))
+
+    def _append_to_text_area(self, text):
+        existing = self.text_area.toPlainText()
+        if existing:
+            self.text_area.setPlainText(existing.rstrip() + "\n\n" + text)
+        else:
+            self.text_area.setPlainText(text)
+
+    def _transform_base64_encode(self):
+        text = self.text_area.toPlainText()
+        encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        self.text_area.setPlainText(encoded)
+
+    def _transform_base64_decode(self):
+        text = self.text_area.toPlainText().strip()
+        try:
+            decoded = base64.b64decode(text, validate=True).decode("utf-8")
+        except Exception:
+            QMessageBox.warning(self, self._tr("Transform"), self._tr("Invalid Base64"))
+            return
+        self.text_area.setPlainText(decoded)
+
+    def _transform_url_encode(self):
+        self.text_area.setPlainText(url_quote(self.text_area.toPlainText()))
+
+    def _transform_url_decode(self):
+        self.text_area.setPlainText(url_unquote(self.text_area.toPlainText()))
+
+    def _transform_format_json(self):
+        text = self.text_area.toPlainText()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as error:
+            QMessageBox.warning(
+                self,
+                self._tr("Transform"),
+                self._tr("Invalid JSON: {error}").format(error=str(error)),
+            )
+            return
+        self.text_area.setPlainText(json.dumps(parsed, indent=2, ensure_ascii=False))
+
+    def _generate_personnummer(self):
+        start_date = date(1950, 1, 1)
+        end_date = date(2005, 12, 31)
+        birthday = start_date + timedelta(days=random.randint(0, (end_date - start_date).days))
+        base = birthday.strftime("%y%m%d") + f"{random.randint(0, 999):03d}"
+        checksum = self._luhn_checksum(base)
+        return f"{birthday.strftime('%Y%m%d')}-{base[6:]}{checksum}"
+
+    def _luhn_checksum(self, digits):
+        total = 0
+        for index, char in enumerate(digits):
+            digit = int(char)
+            if index % 2 == 0:
+                digit *= 2
+                if digit > 9:
+                    digit -= 9
+            total += digit
+        return (10 - (total % 10)) % 10
+
+    def _generate_landline_number(self):
+        area_code = random.choice(["08", "031", "040", "018", "019", "013"])
+        middle = random.randint(100, 999)
+        end_a = random.randint(10, 99)
+        end_b = random.randint(10, 99)
+        return f"{area_code}-{middle} {end_a:02d} {end_b:02d}"
+
+    def _generate_mobile_number(self):
+        prefix = random.choice(["070", "072", "073", "076", "079"])
+        middle = random.randint(100, 999)
+        end_a = random.randint(10, 99)
+        end_b = random.randint(10, 99)
+        return f"{prefix}-{middle} {end_a:02d} {end_b:02d}"
+
+    def _to_international_phone(self, phone_number):
+        compact = re.sub(r"\s+", " ", phone_number.strip())
+        if compact.startswith("0"):
+            return f"+46 {compact[1:]}"
+        return compact
+
+    def _normalize_email_name(self, text):
+        translation = str.maketrans({
+            "å": "a",
+            "ä": "a",
+            "ö": "o",
+            "Å": "a",
+            "Ä": "a",
+            "Ö": "o",
+        })
+        normalized = text.translate(translation).lower()
+        return re.sub(r"[^a-z0-9]+", "", normalized)
+
     def _copy_all_text(self):
         QApplication.clipboard().setText(self.text_area.toPlainText())
+
+    def closeEvent(self, event):
+        self.settings.setValue("text_tool_size", self.size())
+        super().closeEvent(event)
 
 
 class PreviewPage(QWebEnginePage):
@@ -670,13 +1028,18 @@ class PreviewPage(QWebEnginePage):
 
 
 class PreviewBridge(QObject):
-    def __init__(self, copy_text_handler, parent=None):
+    def __init__(self, copy_text_handler, checkbox_toggle_handler, parent=None):
         super().__init__(parent)
         self._copy_text_handler = copy_text_handler
+        self._checkbox_toggle_handler = checkbox_toggle_handler
 
     @Slot(str)
     def copyText(self, text):
         self._copy_text_handler(text)
+
+    @Slot(int, bool)
+    def toggleCheckbox(self, index, checked):
+        self._checkbox_toggle_handler(index, checked)
 
 
 class MainWindow(QMainWindow):
@@ -814,8 +1177,6 @@ class MainWindow(QMainWindow):
                 self.btn_new_file.setStyleSheet("")
             if hasattr(self, "btn_new_folder"):
                 self.btn_new_folder.setStyleSheet("")
-            if hasattr(self, "btn_text_tool"):
-                self.btn_text_tool.setStyleSheet("")
 
     def _set_workspace(self, path):
         self.workspace_dir = path
@@ -1073,6 +1434,12 @@ class MainWindow(QMainWindow):
         self.toolbar_date_action.triggered.connect(self.editor.insert_current_date)
         self.toolbar.addAction(self.toolbar_date_action)
 
+        self.toolbar.addSeparator()
+
+        self.toolbar_text_tool_action = QAction(self)
+        self.toolbar_text_tool_action.triggered.connect(self.open_text_tool)
+        self.toolbar.addAction(self.toolbar_text_tool_action)
+
     def _retranslate_ui(self):
         self.file_menu.setTitle(self._tr("File"))
         self.edit_menu.setTitle(self._tr("Edit"))
@@ -1152,10 +1519,11 @@ class MainWindow(QMainWindow):
         self.toolbar_hr_action.setToolTip(self._tr("Horizontal Rule"))
         self.toolbar_date_action.setText(self._tr("Date"))
         self.toolbar_date_action.setToolTip(self._tr("Insert date (Ctrl+Alt+D)"))
+        self.toolbar_text_tool_action.setText(self._tr("Text Tool"))
+        self.toolbar_text_tool_action.setToolTip(self._tr("Text Tool"))
 
         self.btn_new_file.setText(self._tr("+ New File"))
         self.btn_new_folder.setText(self._tr("+ Folder"))
-        self.btn_text_tool.setText(self._tr("Text Tool"))
         self.editor.setPlaceholderText(self._tr("Write Markdown here..."))
         self._update_editor_counts()
         self.refresh_pinned()
@@ -1204,10 +1572,6 @@ class MainWindow(QMainWindow):
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
         sidebar_layout.addWidget(self.tree)
 
-        self.btn_text_tool = QPushButton("Text Tool")
-        self.btn_text_tool.clicked.connect(self.open_text_tool)
-        sidebar_layout.addWidget(self.btn_text_tool)
-
         sidebar.setMinimumWidth(200)
         sidebar.setMaximumWidth(350)
 
@@ -1221,7 +1585,11 @@ class MainWindow(QMainWindow):
         self.preview = QWebEngineView()
         self.preview.setPage(PreviewPage(self._copy_preview_image, self.toggle_checkbox_from_preview, self.preview))
         self.preview_channel = QWebChannel(self.preview.page())
-        self.preview_bridge = PreviewBridge(self._copy_preview_text, self.preview)
+        self.preview_bridge = PreviewBridge(
+            self._copy_preview_text,
+            self.toggle_checkbox_from_preview,
+            self.preview,
+        )
         self.preview_channel.registerObject("previewBridge", self.preview_bridge)
         self.preview.page().setWebChannel(self.preview_channel)
         self.preview.loadFinished.connect(self._on_preview_loaded)
@@ -1582,10 +1950,11 @@ class MainWindow(QMainWindow):
     def toggle_checkbox_from_preview(self, index, checked):
         text = self.editor.toPlainText()
         lines = text.split("\n")
+        checkbox_pattern = re.compile(r'^(\s*(?:[-+*]|\d+[.)])\s+\[)( |x|X)(\].*)$')
 
         checkbox_count = 0
         for line_index, line in enumerate(lines):
-            match = re.match(r'^(\s*-\s+\[)( |x|X)(\].*)$', line)
+            match = checkbox_pattern.match(line)
             if not match:
                 continue
 
@@ -1869,7 +2238,7 @@ class MainWindow(QMainWindow):
       document.querySelectorAll('input[type="checkbox"]').forEach(function(cb, index) {{
         cb.removeAttribute('disabled');
         cb.addEventListener('change', function() {{
-          window.location.href = 'togglecheck://' + index + '/' + (cb.checked ? '1' : '0');
+          window.previewBridge.toggleCheckbox(index, cb.checked);
         }});
       }});
     }});
@@ -1878,7 +2247,7 @@ class MainWindow(QMainWindow):
 """
 
     def _copy_preview_image(self, encoded_src):
-        src = unquote(encoded_src)
+        src = url_unquote(encoded_src)
         image = QImage()
 
         if src.startswith("data:image/"):

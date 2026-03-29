@@ -46,7 +46,18 @@ source .venv/Scripts/activate
 
 The packaged app is written to `dist/TestLog Editor/`.
 
-The build is driven by `testlog_editor.spec`, so packaging tweaks should go there rather than expanding the shell command in `build.sh`.
+The build is driven by `testlog.spec`, so packaging tweaks should go there rather than expanding the shell command in `build.sh`.
+
+For a reproducible Windows build, install PyInstaller in the active virtual environment and run:
+
+```bash
+python -m pip install pyinstaller
+python -m PyInstaller --noconfirm testlog.spec
+```
+
+`testlog.spec` is configured for a fast-starting `--onedir` Windows build with `console=False`. It excludes a set of unused standard-library modules and unused `PySide6` Qt modules to keep the shipped folder smaller and avoid one-file extraction startup overhead.
+
+To distribute the Windows build, share the full `dist/TestLog Editor/` folder, usually as a zip archive, or package that folder with an installer such as Inno Setup.
 
 PyInstaller builds are platform-specific, so create the package on Windows for Windows, on macOS for macOS, and on Linux for Linux.
 

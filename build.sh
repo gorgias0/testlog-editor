@@ -28,6 +28,6 @@ if ! python -m PyInstaller --version >/dev/null 2>&1; then
   exit 1
 fi
 
-python -m PyInstaller --noconfirm testlog_editor.spec
+python -m PyInstaller --noconfirm testlog.spec
 
 echo "Build complete: $ROOT_DIR/dist/TestLog Editor"
