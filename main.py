@@ -111,10 +111,10 @@ TRANSLATIONS = {
         "Counter String Length": "Längd",
         "Transform": "Transformera",
         "Close": "Stäng",
-        "Base64 Encode": "Base64 →",
-        "Base64 Decode": "→ Base64",
-        "URL Encode": "URL →",
-        "URL Decode": "→ URL",
+        "To Base64": "Till Base64",
+        "From Base64": "Från Base64",
+        "To URL": "Till URL",
+        "From URL": "Från URL",
         "Format JSON": "Formatera JSON",
         "Invalid Base64": "Fel: ogiltig Base64-sträng",
         "Invalid JSON: {error}": "Fel: ogiltig JSON – {error}",
@@ -284,16 +284,21 @@ class Editor(QTextEdit):
         line_text = block.text()
         doc = self.document()
         is_last_line = block.blockNumber() == doc.blockCount() - 1
+        position_in_block = cursor.positionInBlock()
 
-        checkbox_match = re.match(r'^-\s+\[( |x|X)\](.*)$', line_text)
+        checkbox_match = re.match(r'^(-\s+\[( |x|X)\]\s?)(.*)$', line_text)
         if checkbox_match:
-            if not checkbox_match.group(2).strip():
+            prefix = checkbox_match.group(1)
+            content = checkbox_match.group(3)
+            if not content.strip():
                 cursor.movePosition(cursor.MoveOperation.StartOfLine)
                 cursor.movePosition(cursor.MoveOperation.EndOfLine, cursor.MoveMode.KeepAnchor)
                 cursor.removeSelectedText()
                 self.setTextCursor(cursor)
                 if not is_last_line:
                     cursor.insertText('\n')
+            elif position_in_block < len(line_text):
+                self._split_list_item(prefix, content, position_in_block, '- [ ] ')
             else:
                 cursor.movePosition(cursor.MoveOperation.EndOfLine)
                 self.setTextCursor(cursor)
@@ -301,7 +306,10 @@ class Editor(QTextEdit):
             return
 
         # Check for bullet list
-        if re.match(r'^-\s+', line_text):
+        bullet_match = re.match(r'^(-\s+)(.*)$', line_text)
+        if bullet_match:
+            prefix = bullet_match.group(1)
+            content = bullet_match.group(2)
             if line_text.strip() == '-':
                 # Empty list item, exit list mode
                 cursor.movePosition(cursor.MoveOperation.StartOfLine)
@@ -310,6 +318,8 @@ class Editor(QTextEdit):
                 self.setTextCursor(cursor)
                 if not is_last_line:
                     cursor.insertText('\n')
+            elif position_in_block < len(line_text):
+                self._split_list_item(prefix, content, position_in_block, prefix)
             else:
                 # Continue list
                 cursor.movePosition(cursor.MoveOperation.EndOfLine)
@@ -318,9 +328,11 @@ class Editor(QTextEdit):
             return
 
         # Check for numbered list
-        match = re.match(r'^(\d+)\.\s+', line_text)
+        match = re.match(r'^((\d+)\.\s+)(.*)$', line_text)
         if match:
-            num = int(match.group(1))
+            prefix = match.group(1)
+            num = int(match.group(2))
+            content = match.group(3)
             if line_text.strip() == f'{num}.':
                 # Empty numbered item, exit list mode
                 cursor.movePosition(cursor.MoveOperation.StartOfLine)
@@ -329,6 +341,8 @@ class Editor(QTextEdit):
                 self.setTextCursor(cursor)
                 if not is_last_line:
                     cursor.insertText('\n')
+            elif position_in_block < len(line_text):
+                self._split_list_item(prefix, content, position_in_block, f'{num + 1}. ')
             else:
                 # Continue numbered list
                 cursor.movePosition(cursor.MoveOperation.EndOfLine)
@@ -340,6 +354,21 @@ class Editor(QTextEdit):
         from PySide6.QtGui import QKeyEvent
         event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
         super().keyPressEvent(event)
+
+    def _split_list_item(self, current_prefix, content, position_in_block, next_prefix):
+        cursor = self.textCursor()
+        split_offset = max(0, position_in_block - len(current_prefix))
+        before_content = content[:split_offset]
+        after_content = content[split_offset:]
+
+        cursor.beginEditBlock()
+        cursor.movePosition(cursor.MoveOperation.StartOfLine)
+        cursor.movePosition(cursor.MoveOperation.EndOfLine, cursor.MoveMode.KeepAnchor)
+        cursor.removeSelectedText()
+        cursor.insertText(f"{current_prefix}{before_content}\n{next_prefix}{after_content}")
+        cursor.setPosition(cursor.position() - len(after_content))
+        self.setTextCursor(cursor)
+        cursor.endEditBlock()
 
     def _handle_tab(self):
         cursor = self.textCursor()
@@ -545,9 +574,13 @@ class Editor(QTextEdit):
         return range_cursor.selectedText().replace("\u2029", "\n"), (start_pos, end_pos)
 
     def _move_selected_lines(self, direction):
-        text, (start_pos, end_pos) = self._selected_line_range()
         doc = self.document()
+        full_text = self.toPlainText()
         view_state = self._capture_view_state()
+        original_cursor = self.textCursor()
+        _, (start_pos, end_pos) = self._selected_line_range()
+        anchor_offset = original_cursor.anchor() - start_pos
+        position_offset = original_cursor.position() - start_pos
 
         start_block = doc.findBlock(start_pos)
         end_lookup_pos = max(start_pos, end_pos - 1)
@@ -557,43 +590,44 @@ class Editor(QTextEdit):
             previous_block = start_block.previous()
             if not previous_block.isValid():
                 return
-            swap_start = previous_block.position()
-            before_text = previous_block.text()
-            moved_text = before_text + "\n" + text
-            insert_text = text + "\n" + before_text
-            selection_start = swap_start
+            replace_start = previous_block.position()
+            replace_end = end_pos
+            moved_text = full_text[start_pos:end_pos]
+            adjacent_text = full_text[replace_start:start_pos]
+            replacement_text = moved_text + adjacent_text
+            selection_start = replace_start
+            selection_end = replace_start + len(moved_text)
         else:
             next_block = end_block.next()
             if not next_block.isValid():
                 return
-            swap_end = next_block.position() + len(next_block.text())
+            replace_start = start_pos
             if next_block.blockNumber() < doc.blockCount() - 1:
-                swap_end += 1
-            after_text = next_block.text()
-            moved_text = text + "\n" + after_text
-            insert_text = after_text + "\n" + text
-            selection_start = start_pos + len(after_text) + 1
+                replace_end = doc.findBlockByNumber(next_block.blockNumber() + 1).position()
+            else:
+                replace_end = len(full_text)
+            moved_text = full_text[start_pos:end_pos]
+            adjacent_text = full_text[end_pos:replace_end]
+            replacement_text = adjacent_text + moved_text
+            selection_start = start_pos + len(adjacent_text)
+            selection_end = selection_start + len(moved_text)
 
         cursor = self.textCursor()
         cursor.beginEditBlock()
-
-        if direction < 0:
-            cursor.setPosition(swap_start)
-            cursor.setPosition(end_pos, cursor.MoveMode.KeepAnchor)
-        else:
-            cursor.setPosition(start_pos)
-            cursor.setPosition(swap_end, cursor.MoveMode.KeepAnchor)
-
-        if cursor.selectedText().replace("\u2029", "\n") != moved_text:
-            cursor.endEditBlock()
-            return
-
+        cursor.setPosition(replace_start)
+        cursor.setPosition(replace_end, cursor.MoveMode.KeepAnchor)
         cursor.removeSelectedText()
-        cursor.insertText(insert_text)
+        cursor.insertText(replacement_text)
 
         new_cursor = self.textCursor()
-        new_cursor.setPosition(selection_start)
-        new_cursor.setPosition(selection_start + len(text), new_cursor.MoveMode.KeepAnchor)
+        moved_length = len(moved_text)
+        new_anchor = selection_start + max(0, min(anchor_offset, moved_length))
+        new_position = selection_start + max(0, min(position_offset, moved_length))
+        new_cursor.setPosition(new_anchor)
+        if original_cursor.hasSelection():
+            new_cursor.setPosition(new_position, new_cursor.MoveMode.KeepAnchor)
+        else:
+            new_cursor.setPosition(new_position)
         self.setTextCursor(new_cursor)
 
         cursor.endEditBlock()
@@ -756,10 +790,10 @@ class TextToolDialog(QDialog):
         self.file_menu.setTitle(self._with_mnemonic(self._tr("File")))
         self.close_action.setText(self._tr("Close"))
         self.transform_menu.setTitle(self._with_mnemonic(self._tr("Transform")))
-        self.base64_encode_action.setText(self._tr("Base64 Encode"))
-        self.base64_decode_action.setText(self._tr("Base64 Decode"))
-        self.url_encode_action.setText(self._tr("URL Encode"))
-        self.url_decode_action.setText(self._tr("URL Decode"))
+        self.base64_encode_action.setText(self._tr("To Base64"))
+        self.base64_decode_action.setText(self._tr("From Base64"))
+        self.url_encode_action.setText(self._tr("To URL"))
+        self.url_decode_action.setText(self._tr("From URL"))
         self.format_json_action.setText(self._tr("Format JSON"))
         self.generate_lorem_button.setText(self._tr("Generate Lorem"))
         self.generate_lorem_button.setToolTip(self._tr("Generate Lorem"))
@@ -1030,7 +1064,7 @@ class TextToolDialog(QDialog):
         QApplication.clipboard().setText(self.text_area.toPlainText())
 
     def keyPressEvent(self, event):
-        if event.key() in (Qt.Key.Key_Alt, Qt.Key.Key_F10):
+        if event.key() == Qt.Key.Key_F10:
             self.menu_bar.setFocus(Qt.FocusReason.ShortcutFocusReason)
             self.menu_bar.setActiveAction(self.file_menu.menuAction())
             event.accept()
@@ -1230,6 +1264,7 @@ class MainWindow(QMainWindow):
         menubar = self.menuBar()
         self.file_menu = menubar.addMenu("")
         self.edit_menu = menubar.addMenu("")
+        self.transform_menu = menubar.addMenu("")
         self.format_menu = menubar.addMenu("")
         self.view_menu = menubar.addMenu("")
         self.language_menu = menubar.addMenu("")
@@ -1299,6 +1334,16 @@ class MainWindow(QMainWindow):
         self.date_menu_action = QAction(self)
         self.date_menu_action.setShortcut("Ctrl+Alt+D")
         self.date_menu_action.triggered.connect(self.editor.insert_current_date)
+        self.base64_encode_menu_action = QAction(self)
+        self.base64_encode_menu_action.triggered.connect(self._transform_editor_base64_encode)
+        self.base64_decode_menu_action = QAction(self)
+        self.base64_decode_menu_action.triggered.connect(self._transform_editor_base64_decode)
+        self.url_encode_menu_action = QAction(self)
+        self.url_encode_menu_action.triggered.connect(self._transform_editor_url_encode)
+        self.url_decode_menu_action = QAction(self)
+        self.url_decode_menu_action.triggered.connect(self._transform_editor_url_decode)
+        self.format_json_menu_action = QAction(self)
+        self.format_json_menu_action.triggered.connect(self._transform_editor_format_json)
 
         self.font_size_menu = QMenu(self)
         self.font_size_group = QActionGroup(self)
@@ -1358,6 +1403,14 @@ class MainWindow(QMainWindow):
         self.edit_menu.addAction(self.duplicate_lines_action)
         self.edit_menu.addAction(self.move_lines_up_action)
         self.edit_menu.addAction(self.move_lines_down_action)
+
+        self.transform_menu.addAction(self.base64_encode_menu_action)
+        self.transform_menu.addAction(self.base64_decode_menu_action)
+        self.transform_menu.addSeparator()
+        self.transform_menu.addAction(self.url_encode_menu_action)
+        self.transform_menu.addAction(self.url_decode_menu_action)
+        self.transform_menu.addSeparator()
+        self.transform_menu.addAction(self.format_json_menu_action)
 
         self.format_menu.addAction(self.bold_menu_action)
         self.format_menu.addAction(self.italic_menu_action)
@@ -1479,6 +1532,7 @@ class MainWindow(QMainWindow):
     def _retranslate_ui(self):
         self.file_menu.setTitle(self._with_mnemonic(self._tr("File")))
         self.edit_menu.setTitle(self._with_mnemonic(self._tr("Edit")))
+        self.transform_menu.setTitle(self._with_mnemonic(self._tr("Transform")))
         self.format_menu.setTitle(self._with_mnemonic(self._tr("Format")))
         self.view_menu.setTitle(self._with_mnemonic(self._tr("View")))
         self.language_menu.setTitle(self._with_mnemonic(self._tr("Language")))
@@ -1498,6 +1552,11 @@ class MainWindow(QMainWindow):
         self.duplicate_lines_action.setText(self._tr("Duplicate Line/Block"))
         self.move_lines_up_action.setText(self._tr("Move Line/Block Up"))
         self.move_lines_down_action.setText(self._tr("Move Line/Block Down"))
+        self.base64_encode_menu_action.setText(self._tr("To Base64"))
+        self.base64_decode_menu_action.setText(self._tr("From Base64"))
+        self.url_encode_menu_action.setText(self._tr("To URL"))
+        self.url_decode_menu_action.setText(self._tr("From URL"))
+        self.format_json_menu_action.setText(self._tr("Format JSON"))
 
         self.bold_menu_action.setText(self._tr("Bold"))
         self.italic_menu_action.setText(self._tr("Italic"))
@@ -1708,7 +1767,7 @@ class MainWindow(QMainWindow):
             self.setTabOrder(current_widget, next_widget)
 
     def keyPressEvent(self, event):
-        if event.key() in (Qt.Key.Key_Alt, Qt.Key.Key_F10):
+        if event.key() == Qt.Key.Key_F10:
             menubar = self.menuBar()
             menubar.setFocus(Qt.FocusReason.ShortcutFocusReason)
             menubar.setActiveAction(self.file_menu.menuAction())
@@ -1721,6 +1780,58 @@ class MainWindow(QMainWindow):
         self.settings.setValue("outer_splitter", self.outer_splitter.saveState())
         self.settings.setValue("inner_splitter", self.inner_splitter.saveState())
         super().closeEvent(event)
+
+    def _editor_selected_or_all_text(self):
+        cursor = self.editor.textCursor()
+        if cursor.hasSelection():
+            return cursor.selectedText().replace("\u2029", "\n"), True
+        return self.editor.toPlainText(), False
+
+    def _replace_editor_selected_or_all_text(self, text, replace_selection):
+        cursor = self.editor.textCursor()
+        if replace_selection and cursor.hasSelection():
+            cursor.insertText(text)
+            self.editor.setTextCursor(cursor)
+        else:
+            self.editor.setPlainText(text)
+
+    def _transform_editor_base64_encode(self):
+        text, replace_selection = self._editor_selected_or_all_text()
+        encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        self._replace_editor_selected_or_all_text(encoded, replace_selection)
+
+    def _transform_editor_base64_decode(self):
+        text, replace_selection = self._editor_selected_or_all_text()
+        try:
+            decoded = base64.b64decode(text.strip(), validate=True).decode("utf-8")
+        except Exception:
+            QMessageBox.warning(self, self._tr("Transform"), self._tr("Invalid Base64"))
+            return
+        self._replace_editor_selected_or_all_text(decoded, replace_selection)
+
+    def _transform_editor_url_encode(self):
+        text, replace_selection = self._editor_selected_or_all_text()
+        self._replace_editor_selected_or_all_text(url_quote(text), replace_selection)
+
+    def _transform_editor_url_decode(self):
+        text, replace_selection = self._editor_selected_or_all_text()
+        self._replace_editor_selected_or_all_text(url_unquote(text), replace_selection)
+
+    def _transform_editor_format_json(self):
+        text, replace_selection = self._editor_selected_or_all_text()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as error:
+            QMessageBox.warning(
+                self,
+                self._tr("Transform"),
+                self._tr("Invalid JSON: {error}").format(error=str(error)),
+            )
+            return
+        self._replace_editor_selected_or_all_text(
+            json.dumps(parsed, indent=2, ensure_ascii=False),
+            replace_selection,
+        )
 
     def _insert_line_prefix(self, prefix):
         cursor = self.editor.textCursor()
