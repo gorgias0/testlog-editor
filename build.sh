@@ -10,7 +10,8 @@ if [[ ! -d .venv ]]; then
   exit 1
 fi
 
-source .venv/bin/activate
+# source .venv/bin/activate doesn't work in bash on Windows, so we have to use the .venv\Scripts\activate script instead
+source .venv\Scripts\activate
 
 if [[ "${SKIP_PIP_INSTALL:-0}" != "1" ]]; then
   if ! python -m pip install -r requirements.txt; then
