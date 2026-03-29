@@ -20,8 +20,8 @@ from PySide6.QtWidgets import (
     QToolButton, QSpinBox, QFormLayout, QDialogButtonBox,
     QMenuBar, QCheckBox, QLineEdit
 )
-from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QObject, Slot, QSortFilterProxyModel
-from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QKeySequence, QTextCursor, QIntValidator
+from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QObject, Slot, QSortFilterProxyModel, QItemSelectionModel
+from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebChannel import QWebChannel
@@ -150,6 +150,9 @@ TRANSLATIONS = {
         "Font Size": "Fontstorlek",
         "Light Mode": "Ljust läge",
         "Dark Mode": "Mörkt läge",
+        "Search Files...": "Sök filer...",
+        "Search Document...": "Sök i dokument...",
+        "No Matches": "Inga träffar",
     }
 }
 
@@ -175,7 +178,9 @@ class WorkspaceSortProxyModel(QSortFilterProxyModel):
         super().__init__(parent)
         self._source_model = source_model
         self.pinned_paths = pinned_paths if pinned_paths is not None else set()
+        self.search_term = ""
         self.setSourceModel(source_model)
+        self.setRecursiveFilteringEnabled(True)
 
     def lessThan(self, left, right):
         left_path = self._source_model.filePath(left)
@@ -202,6 +207,38 @@ class WorkspaceSortProxyModel(QSortFilterProxyModel):
         if is_dir:
             return 1
         return 2
+
+    def set_search(self, term):
+        self.search_term = term.lower().strip()
+        self.invalidateFilter()
+
+    def filterAcceptsRow(self, source_row, source_parent):
+        index = self._source_model.index(source_row, 0, source_parent)
+        if not index.isValid():
+            return False
+
+        if not self.search_term:
+            return True
+
+        if self._source_model.isDir(index):
+            return self._directory_contains_match(index)
+
+        filename = self._source_model.fileName(index).lower()
+        return self.search_term in filename
+
+    def _directory_contains_match(self, directory_index):
+        for row in range(self._source_model.rowCount(directory_index)):
+            child_index = self._source_model.index(row, 0, directory_index)
+            if not child_index.isValid():
+                continue
+            if self._source_model.isDir(child_index):
+                if self._directory_contains_match(child_index):
+                    return True
+            else:
+                filename = self._source_model.fileName(child_index).lower()
+                if self.search_term in filename:
+                    return True
+        return False
 
 
 class Editor(QTextEdit):
@@ -1138,6 +1175,7 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geometry)
         self._setup_menu()
         self._setup_toolbar()
+        self._configure_focus_navigation()
         self._apply_theme()
         self._retranslate_ui()
         self._load_last_workspace()
@@ -1619,6 +1657,8 @@ class MainWindow(QMainWindow):
 
         self.btn_new_file.setText(self._tr("+ New File"))
         self.btn_new_folder.setText(self._tr("+ Folder"))
+        self.sidebar_search.setPlaceholderText(self._tr("Search Files..."))
+        self.find_input.setPlaceholderText(self._tr("Search Document..."))
         self.editor.setPlaceholderText(self._tr("Write Markdown here..."))
         self._update_editor_counts()
         self.refresh_pinned()
@@ -1637,6 +1677,12 @@ class MainWindow(QMainWindow):
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(4, 4, 4, 4)
         sidebar_layout.setSpacing(4)
+
+        self.sidebar_search = QLineEdit()
+        self.sidebar_search.setPlaceholderText(self._tr("Search Files..."))
+        self.sidebar_search.setClearButtonEnabled(True)
+        self.sidebar_search.textChanged.connect(lambda text: self._schedule_sidebar_search(text))
+        sidebar_layout.addWidget(self.sidebar_search)
 
         btn_row = QHBoxLayout()
         self.btn_new_file = QPushButton("+ Ny fil")
@@ -1664,6 +1710,7 @@ class MainWindow(QMainWindow):
         self.tree.hideColumn(3)
         self.tree.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self.tree.clicked.connect(self.tree_item_clicked)
+        self.tree.activated.connect(self.tree_item_clicked)
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
         sidebar_layout.addWidget(self.tree)
 
@@ -1676,6 +1723,7 @@ class MainWindow(QMainWindow):
         self.editor = Editor(on_image_paste=self.handle_image_paste)
         self.editor.setPlaceholderText("Skriv Markdown här...")
         self._apply_editor_font()
+        self._setup_find_bar()
 
         self.preview = QWebEngineView()
         self.preview.setPage(PreviewPage(self._copy_preview_image, self.toggle_checkbox_from_preview, self.preview))
@@ -1698,7 +1746,7 @@ class MainWindow(QMainWindow):
         )
         self.preview.addAction(self.preview_copy_action)
 
-        self.inner_splitter.addWidget(self.editor)
+        self.inner_splitter.addWidget(self.editor_panel)
         self.inner_splitter.addWidget(self.preview)
         self.inner_splitter.setSizes([550, 550])
 
@@ -1730,12 +1778,80 @@ class MainWindow(QMainWindow):
         self.editor.textChanged.connect(self.autosave_timer.start)
         self.editor.textChanged.connect(self._update_editor_counts)
         self.editor.cursorPositionChanged.connect(self._update_editor_counts)
+        self.editor.cursorPositionChanged.connect(self._sync_find_current_match_from_cursor)
         self.editor.verticalScrollBar().valueChanged.connect(self._sync_preview_scroll)
+
+        self.sidebar_search_timer = QTimer(self)
+        self.sidebar_search_timer.setSingleShot(True)
+        self.sidebar_search_timer.setInterval(180)
+        self.sidebar_search_timer.timeout.connect(lambda: self._apply_sidebar_search())
         self._update_editor_counts()
+
+    def _setup_find_bar(self):
+        self.editor_panel = QWidget()
+        editor_layout = QVBoxLayout(self.editor_panel)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(4)
+        editor_layout.addWidget(self.editor)
+
+        self.find_bar = QWidget()
+        find_layout = QHBoxLayout(self.find_bar)
+        find_layout.setContentsMargins(0, 0, 0, 0)
+        find_layout.setSpacing(6)
+
+        self.find_input = QLineEdit()
+        self.find_input.setPlaceholderText(self._tr("Search Document..."))
+        self.find_prev_button = QPushButton("∧")
+        self.find_next_button = QPushButton("∨")
+        self.find_counter_label = QLabel("")
+        self.find_close_button = QPushButton("✕")
+
+        find_layout.addWidget(self.find_input, 1)
+        find_layout.addWidget(self.find_prev_button)
+        find_layout.addWidget(self.find_next_button)
+        find_layout.addWidget(self.find_counter_label)
+        find_layout.addWidget(self.find_close_button)
+
+        self.find_bar.setVisible(False)
+        editor_layout.addWidget(self.find_bar)
+
+        self.find_matches = []
+        self.current_find_index = -1
+        self.pending_find_term = ""
+        self.find_search_generation = 0
+        self.find_search_running = False
+
+        self.find_search_timer = QTimer(self)
+        self.find_search_timer.setSingleShot(True)
+        self.find_search_timer.setInterval(180)
+        self.find_search_timer.timeout.connect(lambda: self._run_pending_find_search())
+
+        self.find_input.textChanged.connect(lambda text: self._schedule_find_results(text))
+        self.find_prev_button.clicked.connect(lambda checked=False: self._find_previous())
+        self.find_next_button.clicked.connect(lambda checked=False: self._find_next())
+        self.find_close_button.clicked.connect(lambda checked=False: self.close_find_bar())
+        self.find_input.installEventFilter(self)
+
+        self.find_action = QAction(self)
+        self.find_action.setShortcut(QKeySequence.Find)
+        self.find_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.find_action.triggered.connect(lambda checked=False: self.open_find_bar())
+        self.addAction(self.find_action)
+
+        self.find_next_action = QAction(self)
+        self.find_next_action.setShortcut("Ctrl+G")
+        self.find_next_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.find_next_action.triggered.connect(lambda checked=False: self._find_next())
+        self.addAction(self.find_next_action)
+
+        self.find_close_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self.editor_panel)
+        self.find_close_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.find_close_shortcut.activated.connect(lambda: self.close_find_bar())
 
     def _configure_focus_navigation(self):
         self.menuBar().setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.toolbar.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.sidebar_search.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.btn_new_file.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.btn_new_folder.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.tree.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -1762,9 +1878,61 @@ class MainWindow(QMainWindow):
         focus_chain = [self.menuBar()] + [widget for widget in toolbar_widgets if widget is not None]
         for widget in focus_chain:
             widget.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-        focus_chain.extend([self.btn_new_file, self.btn_new_folder, self.tree, self.editor, self.preview])
+        focus_chain.extend([self.sidebar_search, self.btn_new_file, self.btn_new_folder, self.tree, self.editor, self.preview])
         for current_widget, next_widget in zip(focus_chain, focus_chain[1:]):
             self.setTabOrder(current_widget, next_widget)
+
+    def _schedule_sidebar_search(self, text):
+        self.sidebar_search_timer.start()
+
+    def _apply_sidebar_search(self):
+        text = self.sidebar_search.text()
+        has_search = bool(text)
+        if has_search and not getattr(self, "_tree_expanded_paths_before_search", None):
+            self._tree_expanded_paths_before_search = self._expanded_tree_paths()
+        self.fs_proxy_model.set_search(text)
+        if has_search:
+            self.tree.expandAll()
+        elif getattr(self, "_tree_expanded_paths_before_search", None) is not None:
+            self._restore_expanded_tree_paths(self._tree_expanded_paths_before_search)
+            self._tree_expanded_paths_before_search = None
+        self.tree.viewport().update()
+
+    def _expanded_tree_paths(self):
+        expanded_paths = set()
+
+        def walk(parent_index):
+            for row in range(self.fs_proxy_model.rowCount(parent_index)):
+                index = self.fs_proxy_model.index(row, 0, parent_index)
+                if not index.isValid():
+                    continue
+                source_index = self.fs_proxy_model.mapToSource(index)
+                if not source_index.isValid():
+                    continue
+                if self.tree.isExpanded(index):
+                    expanded_paths.add(self.fs_model.filePath(source_index))
+                    walk(index)
+
+        walk(self.tree.rootIndex())
+        return expanded_paths
+
+    def _restore_expanded_tree_paths(self, expanded_paths):
+        def walk(parent_index):
+            for row in range(self.fs_proxy_model.rowCount(parent_index)):
+                index = self.fs_proxy_model.index(row, 0, parent_index)
+                if not index.isValid():
+                    continue
+                source_index = self.fs_proxy_model.mapToSource(index)
+                if not source_index.isValid():
+                    continue
+                path = self.fs_model.filePath(source_index)
+                if path in expanded_paths:
+                    self.tree.expand(index)
+                    walk(index)
+                else:
+                    self.tree.collapse(index)
+
+        walk(self.tree.rootIndex())
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_F10:
@@ -1794,6 +1962,137 @@ class MainWindow(QMainWindow):
             self.editor.setTextCursor(cursor)
         else:
             self.editor.setPlainText(text)
+
+    def open_find_bar(self):
+        selected_text = self.editor.textCursor().selectedText().replace("\u2029", "\n")
+        self.find_bar.setVisible(True)
+        if selected_text:
+            self.find_input.setText(selected_text)
+        self.find_input.setFocus()
+        self.find_input.selectAll()
+        if not selected_text:
+            self._schedule_find_results(self.find_input.text())
+
+    def close_find_bar(self):
+        if not self.find_bar.isVisible():
+            return
+        self.find_bar.setVisible(False)
+        self.find_input.clear()
+        self.find_matches = []
+        self.current_find_index = -1
+        self.pending_find_term = ""
+        self.find_search_timer.stop()
+        self.find_counter_label.setText("")
+        self.editor.setExtraSelections([])
+        self.editor.setFocus()
+
+    def _schedule_find_results(self, term):
+        self.pending_find_term = term
+        self.find_search_generation += 1
+        self.find_search_timer.start()
+
+    def _run_pending_find_search(self):
+        if self.find_search_running:
+            self.find_search_timer.start()
+            return
+
+        self.find_search_running = True
+        generation = self.find_search_generation
+        term = self.pending_find_term
+        self.find_matches = self._collect_find_matches(term)
+        if not self.find_matches:
+            self.current_find_index = -1
+            self.find_counter_label.setText(self._tr("No Matches") if term else "")
+            self.editor.setExtraSelections([])
+            self.find_search_running = False
+            if generation != self.find_search_generation:
+                self.find_search_timer.start()
+            return
+
+        self.current_find_index = self._best_find_match_index()
+        self._apply_find_highlights()
+        self._focus_find_match(self.current_find_index)
+        self.find_search_running = False
+        if generation != self.find_search_generation:
+            self.find_search_timer.start()
+
+    def _collect_find_matches(self, term):
+        if not term:
+            return []
+
+        doc = self.editor.document()
+        matches = []
+        cursor = QTextCursor(doc)
+        while True:
+            cursor = doc.find(term, cursor, QTextDocument.FindFlag(0))
+            if cursor.isNull():
+                break
+            matches.append(QTextCursor(cursor))
+        return matches
+
+    def _best_find_match_index(self):
+        cursor_pos = self.editor.textCursor().selectionStart()
+        for index, match in enumerate(self.find_matches):
+            if match.selectionStart() >= cursor_pos:
+                return index
+        return 0
+
+    def _apply_find_highlights(self):
+        selections = []
+        for index, match in enumerate(self.find_matches):
+            selection = QTextEdit.ExtraSelection()
+            selection.cursor = QTextCursor(match)
+            color = QColor("#f59e0b") if index == self.current_find_index else QColor("#fde047")
+            selection.format.setBackground(color)
+            selections.append(selection)
+        self.editor.setExtraSelections(selections)
+        if self.find_matches:
+            self.find_counter_label.setText(f"{self.current_find_index + 1} / {len(self.find_matches)}")
+
+    def _focus_find_match(self, index):
+        if not self.find_matches:
+            return
+        self.current_find_index = index % len(self.find_matches)
+        cursor = QTextCursor(self.find_matches[self.current_find_index])
+        self.editor.setTextCursor(cursor)
+        self.editor.ensureCursorVisible()
+        self._apply_find_highlights()
+
+    def _find_next(self):
+        if not self.find_bar.isVisible():
+            self.open_find_bar()
+            return
+        if self.find_matches:
+            self._focus_find_match(self.current_find_index + 1)
+
+    def _find_previous(self):
+        if self.find_matches:
+            self._focus_find_match(self.current_find_index - 1)
+
+    def _sync_find_current_match_from_cursor(self):
+        if not self.find_bar.isVisible() or not self.find_matches:
+            return
+        cursor = self.editor.textCursor()
+        position = cursor.selectionStart()
+        for index, match in enumerate(self.find_matches):
+            if match.selectionStart() == position and match.selectionEnd() == cursor.selectionEnd():
+                if self.current_find_index != index:
+                    self.current_find_index = index
+                    self._apply_find_highlights()
+                return
+
+    def eventFilter(self, obj, event):
+        if obj is getattr(self, "find_input", None) and event.type() == event.Type.KeyPress:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
+                    self._find_previous()
+                else:
+                    self._find_next()
+                return True
+            if event.key() == Qt.Key.Key_Escape:
+                self.close_find_bar()
+                return True
+        return super().eventFilter(obj, event)
 
     def _transform_editor_base64_encode(self):
         text, replace_selection = self._editor_selected_or_all_text()
@@ -2080,6 +2379,8 @@ class MainWindow(QMainWindow):
         self._new_session()
         self.editor.setPlainText(f"# {name.strip()}\n")
         self.save_file()
+        self._select_file_in_tree(path)
+        self.tree.setFocus()
         self.setWindowTitle(self._window_title(f"{name.strip()}.testlog"))
 
     def new_folder_in_workspace(self):
@@ -2089,7 +2390,10 @@ class MainWindow(QMainWindow):
         if not ok or not name.strip():
             return
         target_dir = self._selected_directory_for_new_items()
-        os.makedirs(os.path.join(target_dir, name.strip()), exist_ok=True)
+        new_path = os.path.join(target_dir, name.strip())
+        os.makedirs(new_path, exist_ok=True)
+        self._select_file_in_tree(new_path)
+        self.tree.setFocus()
 
     def tree_item_clicked(self, index):
         source_index = self.fs_proxy_model.mapToSource(index)
@@ -2251,7 +2555,11 @@ class MainWindow(QMainWindow):
 
         index = self.fs_proxy_model.mapFromSource(source_index)
         if not index.isValid():
-            return
+            if self.sidebar_search.text():
+                self.sidebar_search.clear()
+                index = self.fs_proxy_model.mapFromSource(source_index)
+            if not index.isValid():
+                return
 
         parent = index.parent()
         while parent.isValid():
@@ -2259,6 +2567,10 @@ class MainWindow(QMainWindow):
             parent = parent.parent()
 
         self.tree.setCurrentIndex(index)
+        self.tree.selectionModel().select(
+            index,
+            QItemSelectionModel.SelectionFlag.ClearAndSelect | QItemSelectionModel.SelectionFlag.Rows,
+        )
         self.tree.scrollTo(index)
 
     def save_file(self):
