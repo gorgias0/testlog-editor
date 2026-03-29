@@ -722,15 +722,40 @@ class TextToolDialog(QDialog):
 
         self.text_area.textChanged.connect(self._update_counts)
         self.text_area.cursorPositionChanged.connect(self._update_counts)
+        self._configure_focus_navigation()
         self.retranslate_ui()
         self._update_counts()
+
+    def _with_mnemonic(self, text):
+        return f"&{text}" if text else text
+
+    def _configure_focus_navigation(self):
+        self.menu_bar.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.toolbar.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.generate_lorem_button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.text_area.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        toolbar_widgets = [
+            self.generate_lorem_button,
+            self.toolbar.widgetForAction(self.counter_string_action),
+            self.toolbar.widgetForAction(self.uuid_action),
+            self.toolbar.widgetForAction(self.testdata_action),
+            self.toolbar.widgetForAction(self.special_characters_action),
+            self.toolbar.widgetForAction(self.copy_all_action),
+            self.toolbar.widgetForAction(self.clear_action),
+        ]
+        focusable_widgets = [self.menu_bar] + [widget for widget in toolbar_widgets if widget is not None] + [self.text_area]
+        for widget in focusable_widgets[1:-1]:
+            widget.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        for current_widget, next_widget in zip(focusable_widgets, focusable_widgets[1:]):
+            self.setTabOrder(current_widget, next_widget)
 
     def retranslate_ui(self):
         self.setWindowTitle(self._tr("Text Tool"))
         self.text_area.setPlaceholderText(self._tr("Paste text here..."))
-        self.file_menu.setTitle(self._tr("File"))
+        self.file_menu.setTitle(self._with_mnemonic(self._tr("File")))
         self.close_action.setText(self._tr("Close"))
-        self.transform_menu.setTitle(self._tr("Transform"))
+        self.transform_menu.setTitle(self._with_mnemonic(self._tr("Transform")))
         self.base64_encode_action.setText(self._tr("Base64 Encode"))
         self.base64_decode_action.setText(self._tr("Base64 Decode"))
         self.url_encode_action.setText(self._tr("URL Encode"))
@@ -1004,6 +1029,14 @@ class TextToolDialog(QDialog):
     def _copy_all_text(self):
         QApplication.clipboard().setText(self.text_area.toPlainText())
 
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Alt, Qt.Key.Key_F10):
+            self.menu_bar.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            self.menu_bar.setActiveAction(self.file_menu.menuAction())
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def closeEvent(self, event):
         self.settings.setValue("text_tool_size", self.size())
         super().closeEvent(event)
@@ -1080,6 +1113,9 @@ class MainWindow(QMainWindow):
 
     def _tr(self, text):
         return TRANSLATIONS.get(self.current_language, {}).get(text, text)
+
+    def _with_mnemonic(self, text):
+        return f"&{text}" if text else text
 
     def _window_title(self, filename=None):
         base = self._tr("TestLog Editor")
@@ -1441,11 +1477,11 @@ class MainWindow(QMainWindow):
         self.toolbar.addAction(self.toolbar_text_tool_action)
 
     def _retranslate_ui(self):
-        self.file_menu.setTitle(self._tr("File"))
-        self.edit_menu.setTitle(self._tr("Edit"))
-        self.format_menu.setTitle(self._tr("Format"))
-        self.view_menu.setTitle(self._tr("View"))
-        self.language_menu.setTitle(self._tr("Language"))
+        self.file_menu.setTitle(self._with_mnemonic(self._tr("File")))
+        self.edit_menu.setTitle(self._with_mnemonic(self._tr("Edit")))
+        self.format_menu.setTitle(self._with_mnemonic(self._tr("Format")))
+        self.view_menu.setTitle(self._with_mnemonic(self._tr("View")))
+        self.language_menu.setTitle(self._with_mnemonic(self._tr("Language")))
 
         self.new_action.setText(self._tr("New"))
         self.open_action.setText(self._tr("Open..."))
@@ -1637,6 +1673,48 @@ class MainWindow(QMainWindow):
         self.editor.cursorPositionChanged.connect(self._update_editor_counts)
         self.editor.verticalScrollBar().valueChanged.connect(self._sync_preview_scroll)
         self._update_editor_counts()
+
+    def _configure_focus_navigation(self):
+        self.menuBar().setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.toolbar.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.btn_new_file.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.btn_new_folder.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.tree.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.editor.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.preview.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        toolbar_widgets = [
+            self.toolbar.widgetForAction(self.toolbar_bold_action),
+            self.toolbar.widgetForAction(self.toolbar_italic_action),
+            self.toolbar.widgetForAction(self.toolbar_underline_action),
+            self.toolbar.widgetForAction(self.toolbar_inline_code_action),
+            self.toolbar.widgetForAction(self.toolbar_code_block_action),
+            self.toolbar.widgetForAction(self.toolbar_h1_action),
+            self.toolbar.widgetForAction(self.toolbar_h2_action),
+            self.toolbar.widgetForAction(self.toolbar_h3_action),
+            self.toolbar.widgetForAction(self.toolbar_h4_action),
+            self.toolbar.widgetForAction(self.toolbar_bullet_action),
+            self.toolbar.widgetForAction(self.toolbar_numbered_action),
+            self.toolbar.widgetForAction(self.toolbar_quote_action),
+            self.toolbar.widgetForAction(self.toolbar_hr_action),
+            self.toolbar.widgetForAction(self.toolbar_date_action),
+            self.toolbar.widgetForAction(self.toolbar_text_tool_action),
+        ]
+        focus_chain = [self.menuBar()] + [widget for widget in toolbar_widgets if widget is not None]
+        for widget in focus_chain:
+            widget.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        focus_chain.extend([self.btn_new_file, self.btn_new_folder, self.tree, self.editor, self.preview])
+        for current_widget, next_widget in zip(focus_chain, focus_chain[1:]):
+            self.setTabOrder(current_widget, next_widget)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Alt, Qt.Key.Key_F10):
+            menubar = self.menuBar()
+            menubar.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            menubar.setActiveAction(self.file_menu.menuAction())
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def closeEvent(self, event):
         self.settings.setValue("geometry", self.saveGeometry())
