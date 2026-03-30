@@ -1,24 +1,23 @@
 # TestLog Editor
 
-A small Markdown-based test log editor built with PySide6.
+A local-first desktop Markdown editor for `.testlog` files, built with PySide6.
 
-## Features
+## Highlights
 
-- Workspace browser for `.testlog` files
-- Autosave (every 3 seconds when file is open)
-- Undo/Redo via Edit menu
-- Last opened workspace is restored at startup
-- Paste images to embed in markdown
-- Clickable task list checkboxes in preview
-- Swedish and English UI support
+- Workspace-first flow with a searchable file tree, pinned files, and last-workspace restore
+- Text tools for exploratory testing like; generate test data, lorem ipsum, count chars, convert to Base64 etc.
+- Split editor and live preview with clickable task list checkboxes
+- Robust autosave for saved files, plus save/discard prompts when leaving untitled changes behind
+- Paste screenshots and images directly into a note as embedded markdown assets
+- PDF export that carries embedded images along
+- Light/dark preview themes, editor font sizing, and Swedish/English UI support
 
-## Install
+## Setup
 
 ```bash
-cd /home/daniel/workspace/testlog-editor
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 ## Run
@@ -28,7 +27,7 @@ source .venv/bin/activate
 python main.py
 ```
 
-## Test
+## Tests
 
 Run the focused unit tests with:
 
@@ -43,7 +42,9 @@ Enforce the test suite before each commit in this clone with:
 git config core.hooksPath .githooks
 ```
 
-## Package
+The committed pre-commit hook uses the project virtualenv and runs `python -m pytest`.
+
+## Packaging
 
 Build on the same operating system you want to distribute for:
 
@@ -59,25 +60,13 @@ source .venv/Scripts/activate
 ./build.sh
 ```
 
-The packaged app is written to `dist/TestLog Editor/`.
+Notes:
+- Packaged output is written to `dist/TestLog Editor/`
+- Packaging is driven by `testlog.spec`
+- Windows builds generate a real `.ico` from the app SVG so the packaged executable and taskbar use the TestLog Editor icon
+- PyInstaller builds are platform-specific, so build on the target OS
 
-The build is driven by `testlog.spec`, so packaging tweaks should go there rather than expanding the shell command in `build.sh`.
-
-For a reproducible Windows build, install PyInstaller in the active virtual environment and run:
-
-```bash
-python -m pip install pyinstaller
-python -m PyInstaller --noconfirm testlog.spec
-```
-
-`testlog.spec` is configured for a fast-starting `--onedir` Windows build with `console=False`. It excludes a set of unused standard-library modules and unused `PySide6` Qt modules to keep the shipped folder smaller and avoid one-file extraction startup overhead, while keeping `PySide6.QtSvg` available for Windows builds that need it at runtime.
-The Windows build also generates a `.ico` from the app SVG during packaging so the packaged executable and taskbar use the TestLog Editor icon instead of a generic Python icon.
-
-To distribute the Windows build, share the full `dist/TestLog Editor/` folder, usually as a zip archive, or package that folder with an installer such as Inno Setup.
-
-PyInstaller builds are platform-specific, so create the package on Windows for Windows, on macOS for macOS, and on Linux for Linux.
-
-## Linux Shortcut
+## Linux Launcher
 
 Install a desktop launcher on Linux:
 
