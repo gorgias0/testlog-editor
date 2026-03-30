@@ -1,5 +1,5 @@
-from PySide6.QtCore import QByteArray, Qt
-from PySide6.QtGui import QIcon, QPainter, QPixmap
+from PySide6.QtCore import QByteArray, Qt, QBuffer, QIODevice
+from PySide6.QtGui import QIcon, QPainter, QPixmap, QImage
 from PySide6.QtSvg import QSvgRenderer
 
 
@@ -53,3 +53,61 @@ def icon_from_svg(svg_text, size=64):
     renderer.render(painter)
     painter.end()
     return QIcon(pixmap)
+
+
+def multi_icon_from_svg(svg_text, sizes=(16, 24, 32, 48, 64, 128, 256)):
+    renderer = QSvgRenderer(QByteArray(svg_text.encode("utf-8")))
+    icon = QIcon()
+
+    for size in sizes:
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+        icon.addPixmap(pixmap)
+
+    return icon
+
+
+def ico_bytes_from_svg(svg_text, sizes=(16, 24, 32, 48, 64, 128, 256)):
+    renderer = QSvgRenderer(QByteArray(svg_text.encode("utf-8")))
+    images = []
+
+    for size in sizes:
+        image = QImage(size, size, QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        renderer.render(painter)
+        painter.end()
+
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        image.save(buffer, "PNG")
+        images.append((size, bytes(buffer.data())))
+
+    icon_dir_size = 6 + (16 * len(images))
+    data_offset = icon_dir_size
+    directory_entries = bytearray()
+    image_data = bytearray()
+
+    for size, png_data in images:
+        width = 0 if size >= 256 else size
+        height = 0 if size >= 256 else size
+        directory_entries.extend(width.to_bytes(1, "little"))
+        directory_entries.extend(height.to_bytes(1, "little"))
+        directory_entries.extend((0).to_bytes(1, "little"))
+        directory_entries.extend((0).to_bytes(1, "little"))
+        directory_entries.extend((1).to_bytes(2, "little"))
+        directory_entries.extend((32).to_bytes(2, "little"))
+        directory_entries.extend(len(png_data).to_bytes(4, "little"))
+        directory_entries.extend(data_offset.to_bytes(4, "little"))
+        image_data.extend(png_data)
+        data_offset += len(png_data)
+
+    header = bytearray()
+    header.extend((0).to_bytes(2, "little"))
+    header.extend((1).to_bytes(2, "little"))
+    header.extend(len(images).to_bytes(2, "little"))
+
+    return bytes(header + directory_entries + image_data)

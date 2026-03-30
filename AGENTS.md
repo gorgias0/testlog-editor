@@ -78,7 +78,7 @@ There is no automated test suite in this repository right now, so rely on focuse
 ## File And State Side Effects
 
 - App state is written through `QSettings`.
-- Temporary session data is created under `/tmp/testlog_*`.
+- Temporary session data is created under the operating system temp directory with a `testlog_*` prefix.
 - Sample documents may live inside the chosen workspace and should not be rewritten unless the task calls for it.
 
 ## Notes For Future Agents

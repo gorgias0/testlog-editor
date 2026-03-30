@@ -1,7 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_submodules
 
+from icons import APP_ICON_SVG, ico_bytes_from_svg
 
 EXCLUDED_QT_MODULES = [
     "PySide6.QtBluetooth",
@@ -46,6 +49,11 @@ EXCLUDED_MODULES = [
 
 hiddenimports = collect_submodules("markdown_it") + collect_submodules("mdit_py_plugins")
 
+icon_dir = Path("build") / "icons"
+icon_dir.mkdir(parents=True, exist_ok=True)
+windows_icon_path = icon_dir / "testlog-editor.ico"
+windows_icon_path.write_bytes(ico_bytes_from_svg(APP_ICON_SVG))
+
 a = Analysis(
     ["main.py"],
     pathex=[],
@@ -67,6 +75,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="TestLog Editor",
+    icon=str(windows_icon_path),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

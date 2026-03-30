@@ -6,6 +6,8 @@ import zipfile
 import shutil
 import re
 import base64
+import tempfile
+import ctypes
 from urllib.parse import quote as url_quote, unquote as url_unquote
 from pathlib import Path
 from PySide6.QtWidgets import (
@@ -31,6 +33,7 @@ from icons import (
     TESTLOG_ICON_SVG,
     TESTLOG_PINNED_ICON_SVG,
     icon_from_svg,
+    multi_icon_from_svg,
 )
 from text_tool_dialog import TextToolDialog
 from translations import TRANSLATIONS
@@ -512,7 +515,7 @@ class MainWindow(QMainWindow):
         self.editor_font_size = int(self.settings.value("editor_font_size", 12))
         self.theme_mode = self.settings.value("theme_mode", "light", type=str)
         self.setWindowTitle("TestLog Editor")
-        self.setWindowIcon(icon_from_svg(APP_ICON_SVG, size=64))
+        self.setWindowIcon(multi_icon_from_svg(APP_ICON_SVG))
         self.resize(1400, 800)
 
         self.current_file = None
@@ -562,7 +565,7 @@ class MainWindow(QMainWindow):
         self._retranslate_ui()
 
     def _new_session(self):
-        self.session_dir = f"/tmp/testlog_{uuid.uuid4().hex[:8]}"
+        self.session_dir = tempfile.mkdtemp(prefix="testlog_")
         self.images_dir = os.path.join(self.session_dir, "images")
         os.makedirs(self.images_dir, exist_ok=True)
 
@@ -2011,9 +2014,9 @@ class MainWindow(QMainWindow):
 
     def _embed_images_as_base64(self, html):
         def replace_src(match):
-            path = match.group(1)
-            if path.startswith("file://"):
-                path = path[7:]
+            path = self._resolve_preview_image_path(match.group(1))
+            if not path:
+                return match.group(0)
             if os.path.exists(path):
                 with open(path, "rb") as f:
                     data = base64.b64encode(f.read()).decode("utf-8")
@@ -2024,10 +2027,22 @@ class MainWindow(QMainWindow):
 
         return re.sub(r'src="([^"]+)"', replace_src, html)
 
+    def _resolve_preview_image_path(self, src):
+        if not src or src.startswith(("data:", "http://", "https://")):
+            return None
+
+        if src.startswith("file://"):
+            return QUrl(src).toLocalFile()
+
+        decoded_src = url_unquote(src)
+        if os.path.isabs(decoded_src):
+            return decoded_src
+
+        return os.path.normpath(os.path.join(self.session_dir, decoded_src))
+
     def _build_preview_html(self, interactive=False, theme_mode=None):
         md = self.editor.toPlainText()
-        md_for_preview = md.replace("](images/", f"]({self.images_dir}/")
-        rendered = self.md_parser.render(md_for_preview)
+        rendered = self.md_parser.render(md)
         rendered = self._style_headings(rendered)
         rendered = self._style_code_blocks(rendered, interactive=interactive)
         html = PREVIEW_STYLE + self._preview_theme_assets(theme_mode=theme_mode) + rendered
@@ -2289,9 +2304,14 @@ class MainWindow(QMainWindow):
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("testlog.editor")
+        except Exception:
+            pass
 
     app = QApplication(sys.argv)
-    app.setWindowIcon(icon_from_svg(APP_ICON_SVG, size=64))
+    app.setWindowIcon(multi_icon_from_svg(APP_ICON_SVG))
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
