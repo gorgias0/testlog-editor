@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QStyle
 )
 from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QObject, Slot, QItemSelectionModel
-from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument
+from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebChannel import QWebChannel
@@ -36,6 +36,11 @@ from icons import (
     multi_icon_from_svg,
 )
 from text_tool_dialog import TextToolDialog
+from testlog_utils import (
+    collect_referenced_image_filenames,
+    resolve_preview_image_path,
+    suggest_filename_from_heading,
+)
 from translations import TRANSLATIONS
 from workspace_models import WorkspaceFileSystemModel, WorkspaceSortProxyModel
 
@@ -586,7 +591,17 @@ class MainWindow(QMainWindow):
     def _apply_editor_font(self):
         if not hasattr(self, "editor"):
             return
-        font = QFont("Monospace")
+        if sys.platform == "win32":
+            preferred_families = ["Cascadia Mono", "Consolas", "Courier New"]
+        elif sys.platform == "darwin":
+            preferred_families = ["SF Mono", "Menlo", "Monaco"]
+        else:
+            preferred_families = ["Noto Sans Mono", "DejaVu Sans Mono", "Liberation Mono", "Monospace"]
+
+        available_families = set(QFontDatabase.families())
+        chosen_family = next((family for family in preferred_families if family in available_families), "Monospace")
+
+        font = QFont(chosen_family)
         font.setStyleHint(QFont.StyleHint.Monospace)
         font.setPointSize(self.editor_font_size)
         self.editor.setFont(font)
@@ -649,6 +664,8 @@ class MainWindow(QMainWindow):
                 self.btn_new_folder.setStyleSheet("")
 
     def _set_workspace(self, path):
+        if path != self.workspace_dir and not self._flush_pending_changes():
+            return
         self.workspace_dir = path
         self.fs_model.setRootPath(path)
         root_index = self.fs_model.index(path)
@@ -1318,6 +1335,9 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def closeEvent(self, event):
+        if not self._flush_pending_changes():
+            event.ignore()
+            return
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("outer_splitter", self.outer_splitter.saveState())
         self.settings.setValue("inner_splitter", self.inner_splitter.saveState())
@@ -1763,6 +1783,8 @@ class MainWindow(QMainWindow):
         if not self.workspace_dir:
             QFileDialog.getExistingDirectory(self, self._tr("Select workspace first"))
             return
+        if not self._flush_pending_changes():
+            return
         name, ok = QInputDialog.getText(self, self._tr("New file"), self._tr("Filename (without .testlog):"))
         if not ok or not name.strip():
             return
@@ -1792,6 +1814,10 @@ class MainWindow(QMainWindow):
         source_index = self.fs_proxy_model.mapToSource(index)
         path = self.fs_model.filePath(source_index)
         if path.endswith(".testlog"):
+            if self.current_file and os.path.abspath(path) == os.path.abspath(self.current_file):
+                return
+            if not self._flush_pending_changes():
+                return
             self.open_testlog(path)
 
     def _open_most_recent_testlog(self):
@@ -1905,17 +1931,50 @@ class MainWindow(QMainWindow):
             """ % clamped_ratio
         )
 
+    def _editor_has_unsaved_changes(self):
+        return self.editor.document().isModified()
+
+    def _flush_pending_changes(self):
+        if not self._editor_has_unsaved_changes():
+            return True
+
+        self.autosave_timer.stop()
+
+        if self.current_file:
+            return self.save_file()
+
+        if not self.editor.toPlainText().strip():
+            return True
+
+        answer = QMessageBox.question(
+            self,
+            self._tr("Unsaved Changes"),
+            self._tr("Save changes before leaving this file?"),
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if answer == QMessageBox.StandardButton.Cancel:
+            return False
+        if answer == QMessageBox.StandardButton.Discard:
+            return True
+        return self.save_file()
+
     def autosave(self):
         self.autosave_timer.stop()
-        if not self.current_file:
+        if not self.current_file or not self._editor_has_unsaved_changes():
             return
         self.save_file()
         self.statusBar().showMessage(self._tr("Autosaved"), 2000)
 
     def new_file(self):
+        if not self._flush_pending_changes():
+            return
+        self.autosave_timer.stop()
         self.editor.clear()
         self.current_file = None
         self._new_session()
+        self.editor.document().setModified(False)
+        self.update_preview()
         self.setWindowTitle(self._window_title())
 
     def open_file(self):
@@ -1923,9 +1982,12 @@ class MainWindow(QMainWindow):
             self, self._tr("Open testlog"), "", self._tr("TestLog Files (*.testlog)")
         )
         if path:
+            if not self._flush_pending_changes():
+                return
             self.open_testlog(path)
 
     def open_testlog(self, path):
+        self.autosave_timer.stop()
         shutil.rmtree(self.session_dir, ignore_errors=True)
         self._new_session()
 
@@ -1938,6 +2000,9 @@ class MainWindow(QMainWindow):
                 self.editor.setPlainText(f.read())
 
         self.current_file = path
+        self.editor.document().setModified(False)
+        self.autosave_timer.stop()
+        self.update_preview()
         self.setWindowTitle(self._window_title(os.path.basename(path)))
         self._select_file_in_tree(path)
 
@@ -1968,21 +2033,22 @@ class MainWindow(QMainWindow):
 
     def save_file(self):
         if self.current_file:
-            self._write_testlog(self.current_file)
+            return self._write_testlog(self.current_file)
         else:
-            self.save_file_as()
+            return self.save_file_as()
 
     def save_file_as(self):
         path, _ = QFileDialog.getSaveFileName(
             self, self._tr("Save testlog"), self.workspace_dir or "", self._tr("TestLog Files (*.testlog)")
         )
         if not path:
-            return
+            return False
         if not path.endswith(".testlog"):
             path += ".testlog"
         self.current_file = path
         self._write_testlog(path)
         self.setWindowTitle(self._window_title(os.path.basename(path)))
+        return True
 
     def _write_testlog(self, path):
         note_content = self.editor.toPlainText()
@@ -1991,7 +2057,7 @@ class MainWindow(QMainWindow):
             f.write(note_content)
 
         # Find all image filenames referenced in the note
-        referenced = set(re.findall(r'!\[.*?\]\(images/([^)]+)\)', note_content))
+        referenced = collect_referenced_image_filenames(note_content)
 
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.write(note_path, "note.md")
@@ -2000,17 +2066,13 @@ class MainWindow(QMainWindow):
                     if img in referenced:
                         img_path = os.path.join(self.images_dir, img)
                         zf.write(img_path, f"images/{img}")
+        self.editor.document().setModified(False)
+        self.autosave_timer.stop()
+        return True
 
     def _suggest_filename_from_heading(self):
         """Extract first heading from editor to use as filename."""
-        text = self.editor.toPlainText()
-        match = re.search(r'^#+\s+(.+)$', text, re.MULTILINE)
-        if match:
-            heading = match.group(1).strip()
-            # Remove special characters for filename
-            filename = re.sub(r'[^\w\s-]', '', heading)[:100]
-            return filename.strip() or "export"
-        return "export"
+        return suggest_filename_from_heading(self.editor.toPlainText())
 
     def _embed_images_as_base64(self, html):
         def replace_src(match):
@@ -2028,17 +2090,7 @@ class MainWindow(QMainWindow):
         return re.sub(r'src="([^"]+)"', replace_src, html)
 
     def _resolve_preview_image_path(self, src):
-        if not src or src.startswith(("data:", "http://", "https://")):
-            return None
-
-        if src.startswith("file://"):
-            return QUrl(src).toLocalFile()
-
-        decoded_src = url_unquote(src)
-        if os.path.isabs(decoded_src):
-            return decoded_src
-
-        return os.path.normpath(os.path.join(self.session_dir, decoded_src))
+        return resolve_preview_image_path(src, self.session_dir)
 
     def _build_preview_html(self, interactive=False, theme_mode=None):
         md = self.editor.toPlainText()

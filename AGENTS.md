@@ -32,7 +32,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-The project currently depends on `PySide6`, `markdown-it-py`, `mdit-py-plugins`, and `pyinstaller`.
+The project currently depends on `PySide6`, `markdown-it-py`, `mdit-py-plugins`, `pyinstaller`, and `pytest`.
 
 ## Packaging
 
@@ -45,6 +45,21 @@ source .venv/bin/activate
 
 PyInstaller outputs the packaged app in `dist/TestLog Editor/`. Builds are platform-specific.
 Prefer updating `testlog.spec` when packaging needs to change.
+
+## Tests
+
+Run the focused unit tests with:
+
+```bash
+source .venv/bin/activate
+python -m pytest
+```
+
+To enforce tests before each commit in a local clone, run:
+
+```bash
+git config core.hooksPath .githooks
+```
 
 ## Linux Launcher
 
@@ -67,7 +82,7 @@ Use `package` instead of `source` to target the packaged Linux app.
 
 ## Manual Verification
 
-There is no automated test suite in this repository right now, so rely on focused manual checks:
+There is now a small unit test suite for extracted helper logic, but UI behavior still relies on focused manual checks:
 
 1. Launch `python main.py`.
 2. Open a workspace containing `.testlog` files.

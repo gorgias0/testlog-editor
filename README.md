@@ -28,6 +28,21 @@ source .venv/bin/activate
 python main.py
 ```
 
+## Test
+
+Run the focused unit tests with:
+
+```bash
+source .venv/bin/activate
+python -m pytest
+```
+
+Enforce the test suite before each commit in this clone with:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Package
 
 Build on the same operating system you want to distribute for:
