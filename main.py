@@ -530,6 +530,10 @@ class MainWindow(QMainWindow):
         self.pinned_paths = set(self.pinned_files)
         self._syncing_scrollbars = False
         self._pending_preview_scroll_ratio = 0.0
+        self._preview_loaded = False
+        self._preview_base_url = QUrl()
+        self._pending_preview_body_html = ""
+        self._preview_shell_key = None
         self.md_parser = MarkdownIt().enable("table")
         if tasklists_plugin is not None:
             self.md_parser.use(tasklists_plugin)
@@ -573,6 +577,9 @@ class MainWindow(QMainWindow):
         self.session_dir = tempfile.mkdtemp(prefix="testlog_")
         self.images_dir = os.path.join(self.session_dir, "images")
         os.makedirs(self.images_dir, exist_ok=True)
+        self._preview_loaded = False
+        self._preview_base_url = QUrl()
+        self._preview_shell_key = None
 
     def _load_last_workspace(self):
         path = self.settings.value("last_workspace", "", type=str)
@@ -1136,6 +1143,7 @@ class MainWindow(QMainWindow):
             lambda: self.preview.triggerPageAction(QWebEnginePage.WebAction.Copy)
         )
         self.preview.addAction(self.preview_copy_action)
+        self._load_preview_shell(force=True)
 
         self.inner_splitter.addWidget(self.editor_panel)
         self.inner_splitter.addWidget(self.preview)
@@ -1856,8 +1864,9 @@ class MainWindow(QMainWindow):
         self.timer.stop()
         editor_ratio = self._scroll_ratio(self.editor.verticalScrollBar())
         self._pending_preview_scroll_ratio = editor_ratio
-        html = self._build_preview_html(interactive=True)
-        self.preview.setHtml(html, QUrl.fromLocalFile(self.session_dir + "/"))
+        self._pending_preview_body_html = self._build_preview_body_html(interactive=True)
+        self._load_preview_shell()
+        self._apply_preview_content()
 
     def toggle_checkbox_from_preview(self, index, checked):
         text = self.editor.toPlainText()
@@ -1915,20 +1924,16 @@ class MainWindow(QMainWindow):
 
     def _on_preview_loaded(self, ok):
         if ok:
+            self._preview_loaded = True
+            self._apply_preview_content()
             self._set_preview_scroll_ratio(self._pending_preview_scroll_ratio)
+        else:
+            self._preview_loaded = False
 
     def _set_preview_scroll_ratio(self, ratio):
         clamped_ratio = max(0.0, min(1.0, ratio))
         self.preview.page().runJavaScript(
-            """
-            (function(ratio) {
-              const scrollMax = Math.max(
-                0,
-                document.documentElement.scrollHeight - window.innerHeight
-              );
-              window.scrollTo(0, scrollMax * ratio);
-            })(%f);
-            """ % clamped_ratio
+            "window.setPreviewScrollRatio(%f);" % clamped_ratio
         )
 
     def _editor_has_unsaved_changes(self):
@@ -2092,15 +2097,51 @@ class MainWindow(QMainWindow):
     def _resolve_preview_image_path(self, src):
         return resolve_preview_image_path(src, self.session_dir)
 
-    def _build_preview_html(self, interactive=False, theme_mode=None):
+    def _build_preview_body_html(self, interactive=False):
         md = self.editor.toPlainText()
         rendered = self.md_parser.render(md)
         rendered = self._style_headings(rendered)
         rendered = self._style_code_blocks(rendered, interactive=interactive)
-        html = PREVIEW_STYLE + self._preview_theme_assets(theme_mode=theme_mode) + rendered
+        return rendered
+
+    def _build_preview_html(self, interactive=False, theme_mode=None):
+        body_html = self._build_preview_body_html(interactive=interactive)
+        html = PREVIEW_STYLE + self._preview_theme_assets(theme_mode=theme_mode) + body_html
         if interactive:
             html += self._preview_interaction_assets()
         return html
+
+    def _build_preview_shell_html(self, theme_mode=None):
+        body_html = self._pending_preview_body_html or ""
+        return (
+            PREVIEW_STYLE
+            + self._preview_theme_assets(theme_mode=theme_mode)
+            + "<div id=\"preview-content\"></div>"
+            + self._preview_interaction_assets()
+            + f"<script>window.renderPreviewContent({json.dumps(body_html)});</script>"
+        )
+
+    def _current_preview_base_url(self):
+        return QUrl.fromLocalFile(os.path.join(self.session_dir, ""))
+
+    def _load_preview_shell(self, force=False):
+        base_url = self._current_preview_base_url()
+        shell_key = (base_url.toString(), self.theme_mode, self.current_language)
+        if not force and self._preview_loaded and self._preview_base_url == base_url and self._preview_shell_key == shell_key:
+            return
+        self._preview_loaded = False
+        self._preview_base_url = base_url
+        self._preview_shell_key = shell_key
+        self.preview.setHtml(self._build_preview_shell_html(), base_url)
+
+    def _apply_preview_content(self):
+        if not self._preview_loaded:
+            return
+        content_json = json.dumps(self._pending_preview_body_html or "")
+        self.preview.page().runJavaScript(
+            f"window.renderPreviewContent({content_json});"
+            f"window.setPreviewScrollRatio({self._pending_preview_scroll_ratio:.12f});"
+        )
 
     def _pdf_typography_assets(self):
         return """
@@ -2178,27 +2219,91 @@ class MainWindow(QMainWindow):
 </style>
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script>
+  window.previewBridge = null;
+
+  function syncImageAttributes(target, source) {{
+    Array.from(target.attributes).forEach(function(attr) {{
+      if (!source.hasAttribute(attr.name)) {{
+        target.removeAttribute(attr.name);
+      }}
+    }});
+
+    Array.from(source.attributes).forEach(function(attr) {{
+      target.setAttribute(attr.name, attr.value);
+    }});
+  }}
+
+  function reuseExistingImages(fragment, container) {{
+    const imagesBySrc = new Map();
+    container.querySelectorAll('img').forEach(function(img) {{
+      const src = img.getAttribute('src') || '';
+      if (!imagesBySrc.has(src)) {{
+        imagesBySrc.set(src, []);
+      }}
+      imagesBySrc.get(src).push(img);
+    }});
+
+    fragment.querySelectorAll('img').forEach(function(img) {{
+      const src = img.getAttribute('src') || '';
+      const matches = imagesBySrc.get(src);
+      if (!matches || matches.length === 0) {{
+        return;
+      }}
+
+      const existing = matches.shift();
+      syncImageAttributes(existing, img);
+      img.replaceWith(existing);
+    }});
+  }}
+
+  function wirePreviewInteractions() {{
+    const container = document.getElementById('preview-content');
+    if (!container) return;
+
+    container.querySelectorAll('.copy-btn').forEach(function(btn) {{
+      if (btn.dataset.copyBound === '1') return;
+      btn.dataset.copyBound = '1';
+      btn.addEventListener('click', function() {{
+        var targetId = btn.getAttribute('data-copy-target');
+        var pre = document.getElementById(targetId);
+        if (!pre || !window.previewBridge) return;
+        window.previewBridge.copyText(pre.innerText);
+        btn.textContent = {copied_label!r};
+        setTimeout(function() {{ btn.textContent = {copy_label!r}; }}, 2000);
+      }});
+    }});
+
+    container.querySelectorAll('input[type="checkbox"]').forEach(function(cb, index) {{
+      cb.removeAttribute('disabled');
+      if (cb.dataset.toggleBound === '1') return;
+      cb.dataset.toggleBound = '1';
+      cb.addEventListener('change', function() {{
+        if (window.previewBridge) {{
+          window.previewBridge.toggleCheckbox(index, cb.checked);
+        }}
+      }});
+    }});
+  }}
+
+  window.renderPreviewContent = function(html) {{
+    const container = document.getElementById('preview-content');
+    if (!container) return;
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    reuseExistingImages(template.content, container);
+    container.replaceChildren(...Array.from(template.content.childNodes));
+    wirePreviewInteractions();
+  }};
+
+  window.setPreviewScrollRatio = function(ratio) {{
+    const scrollMax = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    window.scrollTo(0, scrollMax * ratio);
+  }};
+
   document.addEventListener('DOMContentLoaded', function() {{
     new QWebChannel(qt.webChannelTransport, function(channel) {{
       window.previewBridge = channel.objects.previewBridge;
-
-      document.querySelectorAll('.copy-btn').forEach(function(btn) {{
-        btn.addEventListener('click', function() {{
-          var targetId = btn.getAttribute('data-copy-target');
-          var pre = document.getElementById(targetId);
-          if (!pre) return;
-          window.previewBridge.copyText(pre.innerText);
-          btn.textContent = {copied_label!r};
-          setTimeout(function() {{ btn.textContent = {copy_label!r}; }}, 2000);
-        }});
-      }});
-
-      document.querySelectorAll('input[type="checkbox"]').forEach(function(cb, index) {{
-        cb.removeAttribute('disabled');
-        cb.addEventListener('change', function() {{
-          window.previewBridge.toggleCheckbox(index, cb.checked);
-        }});
-      }});
+      wirePreviewInteractions();
     }});
   }});
 </script>
