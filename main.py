@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QStyle
 )
 from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QObject, Slot, QItemSelectionModel
-from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument
+from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument, QTextCharFormat, QSyntaxHighlighter
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebChannel import QWebChannel
@@ -479,6 +479,153 @@ class Editor(QTextEdit):
         self._restore_view_state(view_state)
 
 
+class MarkdownHighlighter(QSyntaxHighlighter):
+    CODE_BLOCK_STATE = 1
+
+    def __init__(self, document, theme_mode="light"):
+        super().__init__(document)
+        self.theme_mode = theme_mode
+        self._build_formats()
+
+    def set_theme_mode(self, theme_mode):
+        if theme_mode == self.theme_mode:
+            return
+        self.theme_mode = theme_mode
+        self._build_formats()
+        self.rehighlight()
+
+    def _build_formats(self):
+        dark = self.theme_mode == "dark"
+
+        def make_format(*, foreground=None, background=None, bold=False, italic=False):
+            text_format = QTextCharFormat()
+            if foreground is not None:
+                text_format.setForeground(QColor(foreground))
+            if background is not None:
+                text_format.setBackground(QColor(background))
+            if bold:
+                text_format.setFontWeight(QFont.Weight.Bold)
+            if italic:
+                text_format.setFontItalic(True)
+            return text_format
+
+        self.heading_line_formats = {
+            1: make_format(foreground="#1d4ed8" if not dark else "#93c5fd", bold=True),
+            2: make_format(foreground="#2563eb" if not dark else "#7dd3fc", bold=True),
+            3: make_format(foreground="#0f766e" if not dark else "#5eead4", bold=True),
+            4: make_format(foreground="#7c3aed" if not dark else "#c4b5fd", bold=True),
+            5: make_format(foreground="#9333ea" if not dark else "#d8b4fe", bold=True),
+            6: make_format(foreground="#a16207" if not dark else "#fcd34d", bold=True),
+        }
+        self.heading_marker_format = make_format(foreground="#94a3b8" if not dark else "#6b7280", bold=True)
+        self.list_marker_format = make_format(foreground="#0284c7" if not dark else "#7dd3fc", bold=True)
+        self.checkbox_format = make_format(foreground="#059669" if not dark else "#86efac", bold=True)
+        self.quote_format = make_format(foreground="#6b7280" if not dark else "#9ca3af", italic=True)
+        self.quote_marker_format = make_format(foreground="#94a3b8" if not dark else "#6b7280", bold=True)
+        self.code_block_format = make_format(
+            foreground="#f8fafc" if not dark else "#f8fafc",
+            background="#4b5563" if not dark else "#2d333b",
+        )
+        self.code_fence_format = make_format(
+            foreground="#cbd5e1" if not dark else "#cbd5e1",
+            background="#4b5563" if not dark else "#2d333b",
+            bold=True,
+        )
+        self.inline_code_format = make_format(
+            foreground="#b45309" if not dark else "#fdba74",
+            background="#f3f4f6" if not dark else "#1f2937",
+        )
+        self.emphasis_marker_format = make_format(foreground="#94a3b8" if not dark else "#6b7280")
+        self.bold_text_format = make_format(foreground="#111827" if not dark else "#f9fafb", bold=True)
+        self.italic_text_format = make_format(foreground="#1f2937" if not dark else "#e5e7eb", italic=True)
+        self.link_text_format = make_format(foreground="#2563eb" if not dark else "#93c5fd")
+        self.link_url_format = make_format(foreground="#7c3aed" if not dark else "#c4b5fd")
+        self.image_alt_format = make_format(foreground="#0f766e" if not dark else "#5eead4")
+        self.image_url_format = make_format(foreground="#b45309" if not dark else "#fdba74")
+        self.rule_format = make_format(foreground="#94a3b8" if not dark else "#6b7280", bold=True)
+
+    def _apply_match_format(self, text, pattern, groups):
+        for match in re.finditer(pattern, text):
+            for group_index, text_format in groups:
+                start, end = match.span(group_index)
+                if end > start:
+                    self.setFormat(start, end - start, text_format)
+
+    def highlightBlock(self, text):
+        self.setCurrentBlockState(0)
+        previous_state = self.previousBlockState()
+        fence_match = re.match(r"^(\s*)(`{3,}|~{3,})(.*)$", text)
+
+        if previous_state == self.CODE_BLOCK_STATE:
+            self.setFormat(0, len(text), self.code_block_format)
+            if fence_match:
+                self.setFormat(0, len(text), self.code_fence_format)
+            else:
+                self.setCurrentBlockState(self.CODE_BLOCK_STATE)
+                return
+
+        if fence_match:
+            self.setFormat(0, len(text), self.code_fence_format)
+            self.setCurrentBlockState(self.CODE_BLOCK_STATE)
+            return
+
+        heading_match = re.match(r"^(#{1,6})(\s+)(.*)$", text)
+        if heading_match:
+            level = len(heading_match.group(1))
+            self.setFormat(0, len(text), self.heading_line_formats[level])
+            self.setFormat(0, len(heading_match.group(1)), self.heading_marker_format)
+            return
+
+        if re.fullmatch(r"\s{0,3}([-*_])(?:\s*\1){2,}\s*", text):
+            self.setFormat(0, len(text), self.rule_format)
+            return
+
+        quote_match = re.match(r"^(\s*>\s?)(.*)$", text)
+        if quote_match:
+            marker_length = len(quote_match.group(1))
+            self.setFormat(0, len(text), self.quote_format)
+            self.setFormat(0, marker_length, self.quote_marker_format)
+
+        list_match = re.match(r"^(\s*)([-+*]|\d+[.)])(\s+)", text)
+        if list_match:
+            marker_start = len(list_match.group(1))
+            marker_length = len(list_match.group(2))
+            self.setFormat(marker_start, marker_length, self.list_marker_format)
+            checkbox_match = re.match(r"^(\s*(?:[-+*]|\d+[.)])\s+)(\[(?: |x|X)\])", text)
+            if checkbox_match:
+                checkbox_start = len(checkbox_match.group(1))
+                self.setFormat(checkbox_start, len(checkbox_match.group(2)), self.checkbox_format)
+
+        self._apply_match_format(text, r"(`+)([^`].*?)(\1)", [
+            (1, self.emphasis_marker_format),
+            (2, self.inline_code_format),
+            (3, self.emphasis_marker_format),
+        ])
+        self._apply_match_format(text, r"(\*\*|__)(?=\S)(.+?[*_]*)(?<=\S)\1", [
+            (1, self.emphasis_marker_format),
+            (2, self.bold_text_format),
+            (0, self.bold_text_format),
+        ])
+        self._apply_match_format(text, r"(?<!\*)\*(?!\*)(?=\S)(.+?)(?<=\S)\*(?!\*)|(?<!_)_(?!_)(?=\S)(.+?)(?<=\S)_(?!_)", [
+            (1, self.italic_text_format),
+            (2, self.italic_text_format),
+        ])
+        self._apply_match_format(text, r"(!\[)([^\]]*)(\]\()([^)]+)(\))", [
+            (1, self.emphasis_marker_format),
+            (2, self.image_alt_format),
+            (3, self.emphasis_marker_format),
+            (4, self.image_url_format),
+            (5, self.emphasis_marker_format),
+        ])
+        self._apply_match_format(text, r"(?<!!)(\[)([^\]]+)(\]\()([^)]+)(\))", [
+            (1, self.emphasis_marker_format),
+            (2, self.link_text_format),
+            (3, self.emphasis_marker_format),
+            (4, self.link_url_format),
+            (5, self.emphasis_marker_format),
+        ])
+
+
 class PreviewPage(QWebEnginePage):
     def __init__(self, image_copy_handler, checkbox_toggle_handler, parent=None):
         super().__init__(parent)
@@ -659,10 +806,14 @@ class MainWindow(QMainWindow):
                 self.editor.setStyleSheet(
                     "background: #22272e; color: #e6edf3; border: 1px solid #444c56;"
                 )
+            if hasattr(self, "editor_highlighter"):
+                self.editor_highlighter.set_theme_mode("dark")
         else:
             self.setStyleSheet("")
             if hasattr(self, "editor"):
                 self.editor.setStyleSheet("background: white; color: black;")
+            if hasattr(self, "editor_highlighter"):
+                self.editor_highlighter.set_theme_mode("light")
             if hasattr(self, "tree"):
                 self.tree.setStyleSheet("")
             if hasattr(self, "btn_new_file"):
@@ -1121,6 +1272,7 @@ class MainWindow(QMainWindow):
         self.editor = Editor(on_image_paste=self.handle_image_paste)
         self.editor.setPlaceholderText("Skriv Markdown här...")
         self._apply_editor_font()
+        self.editor_highlighter = MarkdownHighlighter(self.editor.document(), theme_mode=self.theme_mode)
         self._setup_find_bar()
 
         self.preview = QWebEngineView()
