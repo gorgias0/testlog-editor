@@ -12,15 +12,16 @@ from urllib.parse import quote as url_quote, unquote as url_unquote, urlparse
 from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QSplitter,
+    QPlainTextEdit, QDialog,
     QTextEdit, QFileDialog, QTreeView,
     QWidget, QVBoxLayout,
     QPushButton, QHBoxLayout, QInputDialog,
     QToolBar, QStatusBar, QLabel,
-    QMenu, QMessageBox,
+    QMenu, QMessageBox, QCheckBox,
     QLineEdit, QStyle, QSizePolicy, QToolButton
 )
-from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QObject, Slot, QItemSelectionModel, QSize
-from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument, QTextCharFormat, QSyntaxHighlighter
+from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QRect, QUrl, QSettings, QDate, QObject, Slot, QItemSelectionModel, QSize
+from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument, QTextCharFormat, QTextFormat, QSyntaxHighlighter, QPainter
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebChannel import QWebChannel
@@ -36,6 +37,7 @@ from icons import (
     multi_icon_from_svg,
 )
 from text_tool_dialog import TextToolDialog
+from diff_utils import collect_change_blocks, compute_line_diff_states
 from testlog_utils import (
     collect_referenced_image_filenames,
     resolve_preview_image_path,
@@ -536,6 +538,368 @@ class Editor(QTextEdit):
         self._restore_view_state(view_state)
 
 
+class LineNumberArea(QWidget):
+    def __init__(self, editor):
+        super().__init__(editor)
+        self.editor = editor
+
+    def sizeHint(self):
+        return QSize(self.editor.line_number_area_width(), 0)
+
+    def paintEvent(self, event):
+        self.editor.line_number_area_paint_event(event)
+
+
+class DiffTextEdit(QPlainTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._diff_selections = []
+        self._gutter_bg = QColor("#eef2f7")
+        self._gutter_fg = QColor("#7b8794")
+        self._current_line_color = QColor("#eef6ff")
+        self.line_number_area = LineNumberArea(self)
+        self.blockCountChanged.connect(self._update_line_number_area_width)
+        self.updateRequest.connect(self._update_line_number_area)
+        self.cursorPositionChanged.connect(self._highlight_current_line)
+        self._update_line_number_area_width(0)
+        self._highlight_current_line()
+
+    def line_number_area_width(self):
+        digits = max(2, len(str(max(1, self.blockCount()))))
+        return 12 + self.fontMetrics().horizontalAdvance("9") * digits
+
+    def _update_line_number_area_width(self, _):
+        self.setViewportMargins(self.line_number_area_width(), 0, 0, 0)
+
+    def _update_line_number_area(self, rect, dy):
+        if dy:
+            self.line_number_area.scroll(0, dy)
+        else:
+            self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
+
+        if rect.contains(self.viewport().rect()):
+            self._update_line_number_area_width(0)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        contents_rect = self.contentsRect()
+        self.line_number_area.setGeometry(
+            QRect(contents_rect.left(), contents_rect.top(), self.line_number_area_width(), contents_rect.height())
+        )
+
+    def line_number_area_paint_event(self, event):
+        painter = QPainter(self.line_number_area)
+        painter.fillRect(event.rect(), self._gutter_bg)
+
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = round(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
+        bottom = top + round(self.blockBoundingRect(block).height())
+
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                painter.setPen(self._gutter_fg)
+                painter.drawText(
+                    0,
+                    top,
+                    self.line_number_area.width() - 6,
+                    self.fontMetrics().height(),
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                    str(block_number + 1),
+                )
+
+            block = block.next()
+            top = bottom
+            bottom = top + round(self.blockBoundingRect(block).height())
+            block_number += 1
+
+    def _highlight_current_line(self):
+        selection = QTextEdit.ExtraSelection()
+        selection.cursor = self.textCursor()
+        selection.cursor.clearSelection()
+        selection.format.setBackground(self._current_line_color)
+        selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+        self.setExtraSelections([selection] + self._diff_selections)
+
+    def set_diff_selections(self, selections):
+        self._diff_selections = selections
+        self._highlight_current_line()
+
+    def set_chrome_colors(self, gutter_bg, gutter_fg, current_line_color):
+        self._gutter_bg = QColor(gutter_bg)
+        self._gutter_fg = QColor(gutter_fg)
+        self._current_line_color = QColor(current_line_color)
+        self.line_number_area.update()
+        self.viewport().update()
+
+
+class DiffWindow(QDialog):
+    def __init__(self, translate, palette, editor_font, parent=None):
+        super().__init__(parent, Qt.WindowType.Window)
+        self._tr = translate
+        self._syncing_scroll = False
+        self._change_blocks = []
+        self._current_change_index = -1
+        self.setWindowTitle(self._tr("Diff"))
+        self.resize(1100, 700)
+
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(12, 12, 12, 12)
+        root_layout.setSpacing(8)
+
+        top_row = QHBoxLayout()
+        self.previous_change_button = QPushButton(self._tr("Previous"))
+        self.previous_change_button.clicked.connect(self.go_to_previous_change)
+        top_row.addWidget(self.previous_change_button)
+        self.next_change_button = QPushButton(self._tr("Next"))
+        self.next_change_button.clicked.connect(self.go_to_next_change)
+        top_row.addWidget(self.next_change_button)
+        self.change_counter_label = QLabel("")
+        top_row.addWidget(self.change_counter_label)
+        self.ignore_whitespace_checkbox = QCheckBox(self._tr("Ignore Whitespace"))
+        self.ignore_whitespace_checkbox.toggled.connect(self._schedule_diff_update)
+        top_row.addWidget(self.ignore_whitespace_checkbox)
+        self.ignore_blank_lines_checkbox = QCheckBox(self._tr("Ignore Blank Lines"))
+        self.ignore_blank_lines_checkbox.toggled.connect(self._schedule_diff_update)
+        top_row.addWidget(self.ignore_blank_lines_checkbox)
+        top_row.addStretch(1)
+        self.clear_button = QPushButton(self._tr("Clear"))
+        self.clear_button.clicked.connect(self.clear_texts)
+        top_row.addWidget(self.clear_button)
+        root_layout.addLayout(top_row)
+
+        labels_row = QHBoxLayout()
+        self.label_a = QLabel(self._tr("Text A"))
+        self.label_b = QLabel(self._tr("Text B"))
+        labels_row.addWidget(self.label_a)
+        labels_row.addStretch(1)
+        labels_row.addWidget(self.label_b)
+        root_layout.addLayout(labels_row)
+
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.pane_a = DiffTextEdit()
+        self.pane_b = DiffTextEdit()
+        self.pane_a.setFont(editor_font)
+        self.pane_b.setFont(editor_font)
+        self.splitter.addWidget(self.pane_a)
+        self.splitter.addWidget(self.pane_b)
+        self.splitter.setSizes([550, 550])
+        root_layout.addWidget(self.splitter, 1)
+
+        self.diff_timer = QTimer(self)
+        self.diff_timer.setSingleShot(True)
+        self.diff_timer.setInterval(300)
+        self.diff_timer.timeout.connect(self.update_diff)
+
+        self.pane_a.textChanged.connect(self._schedule_diff_update)
+        self.pane_b.textChanged.connect(self._schedule_diff_update)
+        self.pane_a.verticalScrollBar().valueChanged.connect(self.sync_scroll_a)
+        self.pane_b.verticalScrollBar().valueChanged.connect(self.sync_scroll_b)
+
+        self.apply_theme(palette)
+        self.update_diff()
+
+    def apply_theme(self, palette):
+        self.setStyleSheet(
+            f"""
+            QDialog, QWidget {{
+                background: {palette["window_bg"]};
+                color: {palette["text"]};
+            }}
+            QLabel {{
+                color: {palette["muted_text"]};
+                font-weight: 600;
+            }}
+            QPushButton {{
+                background: {palette["chrome_bg"]};
+                color: {palette["text"]};
+                border: 1px solid {palette["panel_border"]};
+                padding: 4px 10px;
+            }}
+            QPushButton:hover {{
+                background: {palette["chrome_hover"]};
+            }}
+            QPlainTextEdit {{
+                background: {palette["panel_bg"]};
+                color: {palette["text"]};
+                border: 1px solid {palette["panel_border"]};
+                selection-background-color: #bfdbfe;
+            }}
+            """
+        )
+        for editor in (self.pane_a, self.pane_b):
+            editor.set_chrome_colors(
+                palette["chrome_bg"],
+                palette["muted_text"],
+                "#313843" if palette["window_bg"] == "#1f232a" else "#eef6ff",
+            )
+            editor.line_number_area.update()
+            editor.viewport().update()
+
+    def apply_editor_font(self, font):
+        self.pane_a.setFont(font)
+        self.pane_b.setFont(font)
+
+    def clear_texts(self):
+        self.pane_a.clear()
+        self.pane_b.clear()
+        self.update_diff()
+
+    def _schedule_diff_update(self):
+        self.diff_timer.start()
+
+    def _update_change_counter(self):
+        total_changes = len(self._change_blocks)
+        if total_changes == 0:
+            self.change_counter_label.setText(self._tr("No Changes"))
+            return
+        current_index = self._current_change_index + 1 if self._current_change_index >= 0 else 0
+        self.change_counter_label.setText(
+            self._tr("Change {current} of {total}").format(
+                current=current_index,
+                total=total_changes,
+            )
+        )
+
+    def sync_scroll_a(self, value):
+        if not self._syncing_scroll:
+            self._syncing_scroll = True
+            self.pane_b.verticalScrollBar().setValue(value)
+            self._syncing_scroll = False
+
+    def sync_scroll_b(self, value):
+        if not self._syncing_scroll:
+            self._syncing_scroll = True
+            self.pane_a.verticalScrollBar().setValue(value)
+            self._syncing_scroll = False
+
+    def _line_selections(self, editor, line_states, color_by_state):
+        selections = []
+        for line_number, state in enumerate(line_states):
+            colors = color_by_state.get(state)
+            if colors is None:
+                continue
+            background_color, foreground_color = colors
+            block = editor.document().findBlockByNumber(line_number)
+            if not block.isValid():
+                continue
+            selection = QTextEdit.ExtraSelection()
+            selection.cursor = QTextCursor(block)
+            selection.cursor.clearSelection()
+            selection.format.setBackground(QColor(background_color))
+            selection.format.setForeground(QColor(foreground_color))
+            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+            selections.append(selection)
+        return selections
+
+    def _ignore_whitespace_enabled(self):
+        return self.ignore_whitespace_checkbox.isChecked()
+
+    def _ignore_blank_lines_enabled(self):
+        return self.ignore_blank_lines_checkbox.isChecked()
+
+    def _change_anchor(self, start, end, line_count):
+        if line_count <= 0:
+            return None
+        if start < line_count:
+            return start
+        if end > 0:
+            return min(end - 1, line_count - 1)
+        return line_count - 1
+
+    def _scroll_to_line(self, editor, line_number):
+        if line_number is None:
+            return
+        block = editor.document().findBlockByNumber(line_number)
+        if not block.isValid():
+            return
+        cursor = QTextCursor(block)
+        editor.setTextCursor(cursor)
+        editor.centerCursor()
+
+    def _go_to_change(self, index):
+        if not self._change_blocks:
+            return
+        self._current_change_index = index % len(self._change_blocks)
+        self._update_change_counter()
+        change = self._change_blocks[self._current_change_index]
+        self._scroll_to_line(
+            self.pane_a,
+            self._change_anchor(change["a_start"], change["a_end"], self.pane_a.document().blockCount()),
+        )
+        self._scroll_to_line(
+            self.pane_b,
+            self._change_anchor(change["b_start"], change["b_end"], self.pane_b.document().blockCount()),
+        )
+
+    def go_to_next_change(self):
+        if not self._change_blocks:
+            return
+        self._go_to_change(self._current_change_index + 1)
+
+    def go_to_previous_change(self):
+        if not self._change_blocks:
+            return
+        if self._current_change_index < 0:
+            self._go_to_change(len(self._change_blocks) - 1)
+            return
+        self._go_to_change(self._current_change_index - 1)
+
+    def set_pane_text(self, pane_name, text):
+        if pane_name == "a":
+            self.pane_a.setPlainText(text)
+            self.pane_a.setFocus()
+        else:
+            self.pane_b.setPlainText(text)
+            self.pane_b.setFocus()
+        self.update_diff()
+
+    def update_diff(self):
+        lines_a = self.pane_a.toPlainText().splitlines(keepends=False)
+        lines_b = self.pane_b.toPlainText().splitlines(keepends=False)
+        ignore_whitespace = self._ignore_whitespace_enabled()
+        ignore_blank_lines = self._ignore_blank_lines_enabled()
+        line_states_a, line_states_b = compute_line_diff_states(
+            lines_a,
+            lines_b,
+            ignore_whitespace=ignore_whitespace,
+            ignore_blank_lines=ignore_blank_lines,
+        )
+        self._change_blocks = collect_change_blocks(
+            lines_a,
+            lines_b,
+            ignore_whitespace=ignore_whitespace,
+            ignore_blank_lines=ignore_blank_lines,
+        )
+        if not self._change_blocks:
+            self._current_change_index = -1
+        elif self._current_change_index >= len(self._change_blocks):
+            self._current_change_index = 0
+        self.pane_a.set_diff_selections(
+            self._line_selections(
+                self.pane_a,
+                line_states_a,
+                {
+                    "replace": ("#fff3cd", "#4a3b00"),
+                    "delete": ("#ffd7d7", "#5f1d1d"),
+                },
+            )
+        )
+        self.previous_change_button.setEnabled(bool(self._change_blocks))
+        self.next_change_button.setEnabled(bool(self._change_blocks))
+        self._update_change_counter()
+        self.pane_b.set_diff_selections(
+            self._line_selections(
+                self.pane_b,
+                line_states_b,
+                {
+                    "replace": ("#fff3cd", "#4a3b00"),
+                    "insert": ("#d4edda", "#0f5132"),
+                },
+            )
+        )
+
+
 class MarkdownHighlighter(QSyntaxHighlighter):
     CODE_BLOCK_STATE = 1
 
@@ -718,6 +1082,7 @@ class MainWindow(QMainWindow):
         self.current_file = None
         self.workspace_dir = None
         self.text_tool_dialog = None
+        self.diff_window = None
         self.pinned_files = self._load_pinned_files()
         self.pinned_paths = set(self.pinned_files)
         self._syncing_scrollbars = False
@@ -929,6 +1294,8 @@ class MainWindow(QMainWindow):
         font.setStyleHint(QFont.StyleHint.Monospace)
         font.setPointSize(self.editor_font_size)
         self.editor.setFont(font)
+        if self.diff_window is not None:
+            self.diff_window.apply_editor_font(font)
 
     def _set_editor_font_size(self, size):
         if size == self.editor_font_size:
@@ -980,6 +1347,8 @@ class MainWindow(QMainWindow):
             self.editor.setStyleSheet(
                 f"background: {palette['panel_bg']}; color: {palette['text']}; border: 1px solid {palette['panel_border']};"
             )
+        if self.diff_window is not None:
+            self.diff_window.apply_theme(palette)
         if hasattr(self, "preview"):
             self.preview.setStyleSheet(
                 f"background: {palette['panel_bg']}; border: 1px solid {palette['panel_border']};"
@@ -1011,6 +1380,7 @@ class MainWindow(QMainWindow):
         self.transform_menu = menubar.addMenu("")
         self.format_menu = menubar.addMenu("")
         self.view_menu = menubar.addMenu("")
+        self.tools_menu = menubar.addMenu("")
         self.language_menu = menubar.addMenu("")
 
         self.new_action = QAction(self)
@@ -1088,6 +1458,12 @@ class MainWindow(QMainWindow):
         self.url_decode_menu_action.triggered.connect(self._transform_editor_url_decode)
         self.format_json_menu_action = QAction(self)
         self.format_json_menu_action.triggered.connect(self._transform_editor_format_json)
+        self.diff_action = QAction(self)
+        self.diff_action.triggered.connect(self.open_diff_window)
+        self.send_to_diff_a_action = QAction(self)
+        self.send_to_diff_a_action.triggered.connect(lambda: self.send_editor_text_to_diff("a"))
+        self.send_to_diff_b_action = QAction(self)
+        self.send_to_diff_b_action.triggered.connect(lambda: self.send_editor_text_to_diff("b"))
 
         self.font_size_menu = QMenu(self)
         self.font_size_group = QActionGroup(self)
@@ -1178,6 +1554,10 @@ class MainWindow(QMainWindow):
         self.view_menu.addSeparator()
         self.view_menu.addAction(self.light_mode_action)
         self.view_menu.addAction(self.dark_mode_action)
+
+        self.tools_menu.addAction(self.diff_action)
+        self.tools_menu.addAction(self.send_to_diff_a_action)
+        self.tools_menu.addAction(self.send_to_diff_b_action)
 
         self.language_action_group = QActionGroup(self)
         self.language_action_group.setExclusive(True)
@@ -1273,6 +1653,10 @@ class MainWindow(QMainWindow):
         self.toolbar_text_tool_action.triggered.connect(self.open_text_tool)
         self.toolbar.addAction(self.toolbar_text_tool_action)
 
+        self.toolbar_diff_action = QAction(self)
+        self.toolbar_diff_action.triggered.connect(self.open_diff_window)
+        self.toolbar.addAction(self.toolbar_diff_action)
+
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.toolbar.addWidget(spacer)
@@ -1296,6 +1680,7 @@ class MainWindow(QMainWindow):
         self.transform_menu.setTitle(self._with_mnemonic(self._tr("Transform")))
         self.format_menu.setTitle(self._with_mnemonic(self._tr("Format")))
         self.view_menu.setTitle(self._with_mnemonic(self._tr("View")))
+        self.tools_menu.setTitle(self._with_mnemonic(self._tr("Tools")))
         self.language_menu.setTitle(self._with_mnemonic(self._tr("Language")))
 
         self.new_action.setText(self._tr("New"))
@@ -1318,6 +1703,9 @@ class MainWindow(QMainWindow):
         self.url_encode_menu_action.setText(self._tr("To URL"))
         self.url_decode_menu_action.setText(self._tr("From URL"))
         self.format_json_menu_action.setText(self._tr("Format JSON"))
+        self.diff_action.setText(self._tr("Diff..."))
+        self.send_to_diff_a_action.setText(self._tr("Send Current Text to Diff A"))
+        self.send_to_diff_b_action.setText(self._tr("Send Current Text to Diff B"))
 
         self.bold_menu_action.setText(self._tr("Bold"))
         self.italic_menu_action.setText(self._tr("Italic"))
@@ -1377,6 +1765,8 @@ class MainWindow(QMainWindow):
         self.toolbar_date_action.setToolTip(self._tr("Insert date (Ctrl+Alt+D)"))
         self.toolbar_text_tool_action.setText(self._tr("Text Tool"))
         self.toolbar_text_tool_action.setToolTip(self._tr("Text Tool"))
+        self.toolbar_diff_action.setText(self._tr("Diff"))
+        self.toolbar_diff_action.setToolTip(self._tr("Diff..."))
         self.toggle_preview_btn.setToolTip(self._tr("Show/hide preview (Ctrl+Shift+P)"))
 
         self.btn_new_file.setText(self._tr("+ New File"))
@@ -1391,6 +1781,16 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(self._window_title(title_suffix))
         if hasattr(self, "text_tool_dialog") and self.text_tool_dialog is not None:
             self.text_tool_dialog.retranslate_ui()
+        if self.diff_window is not None:
+            self.diff_window.setWindowTitle(self._tr("Diff"))
+            self.diff_window.previous_change_button.setText(self._tr("Previous"))
+            self.diff_window.next_change_button.setText(self._tr("Next"))
+            self.diff_window.ignore_whitespace_checkbox.setText(self._tr("Ignore Whitespace"))
+            self.diff_window.ignore_blank_lines_checkbox.setText(self._tr("Ignore Blank Lines"))
+            self.diff_window.clear_button.setText(self._tr("Clear"))
+            self.diff_window.label_a.setText(self._tr("Text A"))
+            self.diff_window.label_b.setText(self._tr("Text B"))
+            self.diff_window._update_change_counter()
 
     def _setup_ui(self):
         # Yttre splitter: sidebar | höger
@@ -1613,6 +2013,7 @@ class MainWindow(QMainWindow):
             self.toolbar.widgetForAction(self.toolbar_hr_action),
             self.toolbar.widgetForAction(self.toolbar_date_action),
             self.toolbar.widgetForAction(self.toolbar_text_tool_action),
+            self.toolbar.widgetForAction(self.toolbar_diff_action),
         ]
         focus_chain = [self.menuBar()] + [widget for widget in toolbar_widgets if widget is not None]
         for widget in focus_chain:
@@ -1948,6 +2349,17 @@ class MainWindow(QMainWindow):
         self.text_tool_dialog.show()
         self.text_tool_dialog.raise_()
         self.text_tool_dialog.activateWindow()
+
+    def open_diff_window(self):
+        if self.diff_window is None:
+            self.diff_window = DiffWindow(self._tr, self._theme_palette(), self.editor.font(), self)
+        self.diff_window.show()
+        self.diff_window.raise_()
+        self.diff_window.activateWindow()
+
+    def send_editor_text_to_diff(self, pane_name):
+        self.open_diff_window()
+        self.diff_window.set_pane_text(pane_name, self.editor.toPlainText())
 
     def refresh_pinned(self):
         valid_paths = [path for path in self.pinned_files if os.path.exists(path)]
