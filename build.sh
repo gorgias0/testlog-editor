@@ -10,8 +10,21 @@ if [[ ! -d .venv ]]; then
   exit 1
 fi
 
-# source .venv/bin/activate doesn't work in bash on Windows, so we have to use the .venv\Scripts\activate script instead
-source .venv\\Scripts\\activate
+if [[ -f .venv/bin/activate ]]; then
+  # Linux/macOS virtualenv layout
+  # shellcheck disable=SC1091
+  source .venv/bin/activate
+elif [[ -f .venv/Scripts/activate ]]; then
+  # Windows virtualenv layout when running from Git Bash or a similar shell
+  # shellcheck disable=SC1091
+  source .venv/Scripts/activate
+else
+  echo "Missing activation script in .venv."
+  echo "Expected one of:"
+  echo "  .venv/bin/activate"
+  echo "  .venv/Scripts/activate"
+  exit 1
+fi
 
 if [[ "${SKIP_PIP_INSTALL:-0}" != "1" ]]; then
   if ! python -m pip install -r requirements.txt; then

@@ -20,6 +20,8 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
+The text tool's locale-aware test data generator now uses `Faker` for names, addresses, emails, and company names.
+
 ## Run
 
 ```bash
@@ -49,11 +51,19 @@ The committed pre-commit hook uses the project virtualenv and runs `python -m py
 Build on the same operating system you want to distribute for:
 
 ```bash
+./build.sh
+```
+
+`build.sh` will automatically use either `.venv/bin/activate` on Linux/macOS or `.venv/Scripts/activate` on Windows shells such as Git Bash.
+
+If you prefer to activate the virtual environment yourself first, you can still do that:
+
+```bash
 source .venv/bin/activate
 ./build.sh
 ```
 
-On Windows with a Unix-like shell, activate the virtual environment with:
+On Windows with a Unix-like shell:
 
 ```bash
 source .venv/Scripts/activate
