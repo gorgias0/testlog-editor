@@ -9,7 +9,7 @@ PREVIEW_STYLE = """
     color: #1a1a1a;
     max-width: 800px;
     margin: 0 auto;
-    padding: 24px 32px;
+    padding: 4px 16px 12px;
   }
 
   p, li, td, th, blockquote {
@@ -112,5 +112,13 @@ PREVIEW_STYLE = """
   }
 
   a { color: #0066cc; }
+
+  #preview-content > :first-child {
+    margin-top: 0 !important;
+  }
+
+  #preview-content > :last-child {
+    margin-bottom: 0;
+  }
 </style>
 """

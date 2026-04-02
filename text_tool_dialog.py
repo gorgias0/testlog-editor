@@ -82,6 +82,7 @@ class TextToolDialog(QDialog):
         layout.setMenuBar(self.menu_bar)
         self.toolbar = QToolBar()
         self.text_area = QTextEdit()
+        self.text_area.setAcceptRichText(False)
         text_area_font = QFont()
         text_area_font.setFamilies(["Cascadia Code", "Source Code Pro", "Noto Sans Mono", "monospace"])
         text_area_font.setStyleHint(QFont.StyleHint.Monospace)

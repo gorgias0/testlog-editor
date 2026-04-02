@@ -8,7 +8,7 @@ import re
 import base64
 import tempfile
 import ctypes
-from urllib.parse import quote as url_quote, unquote as url_unquote
+from urllib.parse import quote as url_quote, unquote as url_unquote, urlparse
 from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QSplitter,
@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QObject, Slot, QItemSelectionModel
 from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument, QTextCharFormat, QSyntaxHighlighter
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWebEngineCore import QWebEnginePage
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebChannel import QWebChannel
 from markdown_it import MarkdownIt
 from styles import PREVIEW_STYLE
@@ -53,6 +53,13 @@ class Editor(QTextEdit):
     def __init__(self, on_image_paste):
         super().__init__()
         self.on_image_paste = on_image_paste
+        self.setAcceptRichText(False)
+        self._preview_scroll_sync_active = False
+        self._preview_scroll_sync_timer = QTimer(self)
+        self._preview_scroll_sync_timer.setSingleShot(True)
+        self._preview_scroll_sync_timer.timeout.connect(self._clear_preview_scroll_sync)
+        self.verticalScrollBar().sliderPressed.connect(self._begin_preview_scroll_sync)
+        self.verticalScrollBar().sliderReleased.connect(self._hold_preview_scroll_sync_briefly)
 
     def _capture_view_state(self):
         return (
@@ -65,6 +72,20 @@ class Editor(QTextEdit):
         self.verticalScrollBar().setValue(vertical_value)
         self.horizontalScrollBar().setValue(horizontal_value)
 
+    def _begin_preview_scroll_sync(self):
+        self._preview_scroll_sync_active = True
+        self._preview_scroll_sync_timer.stop()
+
+    def _hold_preview_scroll_sync_briefly(self):
+        self._preview_scroll_sync_active = True
+        self._preview_scroll_sync_timer.start(180)
+
+    def _clear_preview_scroll_sync(self):
+        self._preview_scroll_sync_active = False
+
+    def should_sync_preview_scroll(self):
+        return self._preview_scroll_sync_active
+
     def insertFromMimeData(self, source):
         if source.hasImage():
             image = QImage(source.imageData())
@@ -75,6 +96,15 @@ class Editor(QTextEdit):
             super().insertFromMimeData(source)
 
     def keyPressEvent(self, event):
+        if event.key() in (
+            Qt.Key.Key_PageUp,
+            Qt.Key.Key_PageDown,
+            Qt.Key.Key_Home,
+            Qt.Key.Key_End,
+            Qt.Key.Key_Up,
+            Qt.Key.Key_Down,
+        ):
+            self._hold_preview_scroll_sync_briefly()
         if event.key() == Qt.Key.Key_Return and event.modifiers() == Qt.KeyboardModifier.NoModifier:
             self._handle_smart_enter()
             return
@@ -122,6 +152,10 @@ class Editor(QTextEdit):
             return
         
         super().keyPressEvent(event)
+
+    def wheelEvent(self, event):
+        self._hold_preview_scroll_sync_briefly()
+        super().wheelEvent(event)
 
     def _handle_smart_enter(self):
         cursor = self.textCursor()
@@ -524,11 +558,9 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         self.quote_marker_format = make_format(foreground="#94a3b8" if not dark else "#6b7280", bold=True)
         self.code_block_format = make_format(
             foreground="#f8fafc" if not dark else "#f8fafc",
-            background="#4b5563" if not dark else "#2d333b",
         )
         self.code_fence_format = make_format(
             foreground="#cbd5e1" if not dark else "#cbd5e1",
-            background="#4b5563" if not dark else "#2d333b",
             bold=True,
         )
         self.inline_code_format = make_format(
@@ -560,9 +592,10 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             self.setFormat(0, len(text), self.code_block_format)
             if fence_match:
                 self.setFormat(0, len(text), self.code_fence_format)
+                self.setCurrentBlockState(0)
             else:
                 self.setCurrentBlockState(self.CODE_BLOCK_STATE)
-                return
+            return
 
         if fence_match:
             self.setFormat(0, len(text), self.code_fence_format)
@@ -627,19 +660,8 @@ class MarkdownHighlighter(QSyntaxHighlighter):
 
 
 class PreviewPage(QWebEnginePage):
-    def __init__(self, image_copy_handler, checkbox_toggle_handler, parent=None):
-        super().__init__(parent)
-        self._image_copy_handler = image_copy_handler
-        self._checkbox_toggle_handler = checkbox_toggle_handler
-
     def acceptNavigationRequest(self, url, nav_type, is_main_frame):
-        if url.scheme() == "togglecheck":
-            try:
-                index = int(url.host())
-                checked = url.path().lstrip("/") == "1"
-            except ValueError:
-                return False
-            self._checkbox_toggle_handler(index, checked)
+        if url.scheme().lower() not in {"", "about", "data", "file"}:
             return False
         return super().acceptNavigationRequest(url, nav_type, is_main_frame)
 
@@ -681,7 +703,7 @@ class MainWindow(QMainWindow):
         self._preview_base_url = QUrl()
         self._pending_preview_body_html = ""
         self._preview_shell_key = None
-        self.md_parser = MarkdownIt().enable("table")
+        self.md_parser = MarkdownIt("commonmark", {"html": False}).enable("table")
         if tasklists_plugin is not None:
             self.md_parser.use(tasklists_plugin)
         self._new_session()
@@ -712,6 +734,109 @@ class MainWindow(QMainWindow):
         if filename:
             return f"{base} - {filename}"
         return base
+
+    def _theme_palette(self, theme_mode=None):
+        active_theme = theme_mode or self.theme_mode
+        if active_theme == "dark":
+            return {
+                "window_bg": "#1f232a",
+                "chrome_bg": "#22272e",
+                "chrome_hover": "#373e47",
+                "panel_bg": "#2a3038",
+                "panel_border": "#4b5563",
+                "text": "#e6edf3",
+                "muted_text": "#adbac7",
+                "link": "#6cb6ff",
+                "code_bg": "#313843",
+                "code_border": "#4b5563",
+                "code_text": "#e6edf3",
+                "table_header_bg": "#313843",
+                "table_alt_bg": "#2d333b",
+                "blockquote_border": "#768390",
+                "hr": "#444c56",
+                "copy_button_bg": "#3a424d",
+                "copy_button_border": "#667281",
+            }
+        return {
+            "window_bg": "#e9edf3",
+            "chrome_bg": "#dde4ec",
+            "chrome_hover": "#d2dae5",
+            "panel_bg": "#f8fafc",
+            "panel_border": "#c5cfdb",
+            "text": "#17202b",
+            "muted_text": "#526070",
+            "link": "#1459c7",
+            "code_bg": "#eef2f7",
+            "code_border": "#cfd8e3",
+            "code_text": "#273444",
+            "table_header_bg": "#e7edf5",
+            "table_alt_bg": "#f1f5f9",
+            "blockquote_border": "#94a3b8",
+            "hr": "#d6dee8",
+            "copy_button_bg": "#d7dee8",
+            "copy_button_border": "#b4c0ce",
+        }
+
+    def _configure_web_view_security(self, web_view, *, allow_javascript=False):
+        settings = web_view.settings()
+        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, allow_javascript)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.FullScreenSupportEnabled, False)
+        if hasattr(QWebEngineSettings.WebAttribute, "HyperlinkAuditingEnabled"):
+            settings.setAttribute(QWebEngineSettings.WebAttribute.HyperlinkAuditingEnabled, False)
+        if hasattr(settings, "setUnknownUrlSchemePolicy") and hasattr(QWebEngineSettings, "UnknownUrlSchemePolicy"):
+            settings.setUnknownUrlSchemePolicy(
+                QWebEngineSettings.UnknownUrlSchemePolicy.DisallowUnknownUrlSchemes
+            )
+
+    def _sanitize_preview_url(self, value, attribute_name):
+        parsed = urlparse(value)
+        scheme = parsed.scheme.lower()
+        if not scheme:
+            return value
+        if scheme == "file":
+            return value
+        if attribute_name == "src" and value.lower().startswith("data:image/"):
+            return value
+        if attribute_name == "href" and scheme == "mailto":
+            return value
+        return ""
+
+    def _sanitize_preview_html(self, html):
+        html = re.sub(
+            r"<\s*(script|iframe|object|embed|form|svg|math)[^>]*>.*?<\s*/\s*\1\s*>",
+            "",
+            html,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        html = re.sub(
+            r"<\s*(meta|link|base)[^>]*>",
+            "",
+            html,
+            flags=re.IGNORECASE,
+        )
+        html = re.sub(
+            r"\s+on[a-z0-9_-]+\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)",
+            "",
+            html,
+            flags=re.IGNORECASE,
+        )
+
+        def replace_url_attr(match):
+            attribute_name = match.group("attr").lower()
+            quote = match.group("quote")
+            safe_value = self._sanitize_preview_url(match.group("value"), attribute_name)
+            return f' {attribute_name}={quote}{safe_value}{quote}'
+
+        return re.sub(
+            r"\s(?P<attr>href|src)\s*=\s*(?P<quote>[\"'])(?P<value>.*?)(?P=quote)",
+            replace_url_attr,
+            html,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
 
     def _set_language(self, language_code):
         if language_code == self.current_language:
@@ -778,48 +903,45 @@ class MainWindow(QMainWindow):
         self._retranslate_ui()
 
     def _apply_theme(self):
-        if self.theme_mode == "dark":
-            self.setStyleSheet(
-                """
-                QMainWindow, QWidget { background: #1f232a; color: #e6edf3; }
-                QMenuBar, QMenuBar::item, QMenu, QStatusBar, QToolBar {
-                    background: #22272e; color: #e6edf3;
-                }
-                QMenu::item:selected, QMenuBar::item:selected {
-                    background: #2d333b;
-                }
-                QTextEdit, QTreeView, QListWidget {
-                    background: #22272e;
-                    color: #e6edf3;
-                    border: 1px solid #444c56;
-                }
-                QPushButton {
-                    background: #2d333b;
-                    color: #e6edf3;
-                    border: 1px solid #444c56;
-                    padding: 4px 8px;
-                }
-                QPushButton:hover { background: #373e47; }
-                """
+        palette = self._theme_palette()
+        self.setStyleSheet(
+            f"""
+            QMainWindow, QWidget {{
+                background: {palette["window_bg"]};
+                color: {palette["text"]};
+            }}
+            QMenuBar, QMenuBar::item, QMenu, QStatusBar, QToolBar {{
+                background: {palette["chrome_bg"]};
+                color: {palette["text"]};
+            }}
+            QMenu::item:selected, QMenuBar::item:selected {{
+                background: {palette["chrome_hover"]};
+            }}
+            QTreeView, QListWidget {{
+                background: {palette["chrome_bg"]};
+                color: {palette["text"]};
+                border: 1px solid {palette["panel_border"]};
+            }}
+            QPushButton {{
+                background: {palette["chrome_bg"]};
+                color: {palette["text"]};
+                border: 1px solid {palette["panel_border"]};
+                padding: 4px 8px;
+            }}
+            QPushButton:hover {{ background: {palette["chrome_hover"]}; }}
+            """
+        )
+        if hasattr(self, "editor"):
+            self.editor.setStyleSheet(
+                f"background: {palette['panel_bg']}; color: {palette['text']}; border: 1px solid {palette['panel_border']};"
             )
-            if hasattr(self, "editor"):
-                self.editor.setStyleSheet(
-                    "background: #22272e; color: #e6edf3; border: 1px solid #444c56;"
-                )
-            if hasattr(self, "editor_highlighter"):
-                self.editor_highlighter.set_theme_mode("dark")
-        else:
-            self.setStyleSheet("")
-            if hasattr(self, "editor"):
-                self.editor.setStyleSheet("background: white; color: black;")
-            if hasattr(self, "editor_highlighter"):
-                self.editor_highlighter.set_theme_mode("light")
-            if hasattr(self, "tree"):
-                self.tree.setStyleSheet("")
-            if hasattr(self, "btn_new_file"):
-                self.btn_new_file.setStyleSheet("")
-            if hasattr(self, "btn_new_folder"):
-                self.btn_new_folder.setStyleSheet("")
+        if hasattr(self, "preview"):
+            self.preview.setStyleSheet(
+                f"background: {palette['panel_bg']}; border: 1px solid {palette['panel_border']};"
+            )
+            self.preview.page().setBackgroundColor(QColor(palette["panel_bg"]))
+        if hasattr(self, "editor_highlighter"):
+            self.editor_highlighter.set_theme_mode(self.theme_mode)
 
     def _set_workspace(self, path):
         if path != self.workspace_dir and not self._flush_pending_changes():
@@ -1276,7 +1398,8 @@ class MainWindow(QMainWindow):
         self._setup_find_bar()
 
         self.preview = QWebEngineView()
-        self.preview.setPage(PreviewPage(self._copy_preview_image, self.toggle_checkbox_from_preview, self.preview))
+        self.preview.setPage(PreviewPage(self.preview))
+        self._configure_web_view_security(self.preview, allow_javascript=True)
         self.preview_channel = QWebChannel(self.preview.page())
         self.preview_bridge = PreviewBridge(
             self._copy_preview_text,
@@ -2014,8 +2137,8 @@ class MainWindow(QMainWindow):
 
     def update_preview(self):
         self.timer.stop()
-        editor_ratio = self._scroll_ratio(self.editor.verticalScrollBar())
-        self._pending_preview_scroll_ratio = editor_ratio
+        source_max = self.editor.verticalScrollBar().maximum()
+        self._pending_preview_scroll_ratio = 0.0 if source_max <= 0 else self.editor.verticalScrollBar().value() / source_max
         self._pending_preview_body_html = self._build_preview_body_html(interactive=True)
         self._load_preview_shell()
         self._apply_preview_content()
@@ -2024,6 +2147,11 @@ class MainWindow(QMainWindow):
         text = self.editor.toPlainText()
         lines = text.split("\n")
         checkbox_pattern = re.compile(r'^(\s*(?:[-+*]|\d+[.)])\s+\[)( |x|X)(\].*)$')
+        editor_view_state = self.editor._capture_view_state()
+        cursor = self.editor.textCursor()
+        cursor_position = cursor.position()
+        anchor_position = cursor.anchor()
+        self._pending_preview_scroll_ratio = self._scroll_ratio(self.editor.verticalScrollBar())
 
         checkbox_count = 0
         for line_index, line in enumerate(lines):
@@ -2034,12 +2162,14 @@ class MainWindow(QMainWindow):
             if checkbox_count == index:
                 marker = "x" if checked else " "
                 lines[line_index] = f"{match.group(1)}{marker}{match.group(3)}"
-                cursor = self.editor.textCursor()
                 cursor.beginEditBlock()
                 cursor.select(QTextCursor.SelectionType.Document)
                 cursor.insertText("\n".join(lines))
+                cursor.setPosition(anchor_position)
+                cursor.setPosition(cursor_position, QTextCursor.MoveMode.KeepAnchor)
                 cursor.endEditBlock()
                 self.editor.setTextCursor(cursor)
+                self.editor._restore_view_state(editor_view_state)
                 return
 
             checkbox_count += 1
@@ -2064,9 +2194,10 @@ class MainWindow(QMainWindow):
 
     def _sync_preview_scroll(self, value):
         source_max = self.editor.verticalScrollBar().maximum()
-        ratio = 0.0 if source_max <= 0 else value / source_max
-        self._pending_preview_scroll_ratio = ratio
-        self._set_preview_scroll_ratio(ratio)
+        self._pending_preview_scroll_ratio = 0.0 if source_max <= 0 else value / source_max
+        if not self.editor.should_sync_preview_scroll():
+            return
+        self._set_preview_scroll_ratio(self._pending_preview_scroll_ratio)
 
     def _scroll_ratio(self, scrollbar):
         maximum = scrollbar.maximum()
@@ -2075,12 +2206,11 @@ class MainWindow(QMainWindow):
         return scrollbar.value() / maximum
 
     def _on_preview_loaded(self, ok):
-        if ok:
-            self._preview_loaded = True
-            self._apply_preview_content()
-            self._set_preview_scroll_ratio(self._pending_preview_scroll_ratio)
-        else:
-            self._preview_loaded = False
+        if not ok:
+            return
+        self._preview_loaded = True
+        self._apply_preview_content()
+        self._set_preview_scroll_ratio(self._pending_preview_scroll_ratio)
 
     def _set_preview_scroll_ratio(self, ratio):
         clamped_ratio = max(0.0, min(1.0, ratio))
@@ -2254,22 +2384,22 @@ class MainWindow(QMainWindow):
         rendered = self.md_parser.render(md)
         rendered = self._style_headings(rendered)
         rendered = self._style_code_blocks(rendered, interactive=interactive)
-        return rendered
+        return self._sanitize_preview_html(rendered)
 
     def _build_preview_html(self, interactive=False, theme_mode=None):
         body_html = self._build_preview_body_html(interactive=interactive)
-        html = PREVIEW_STYLE + self._preview_theme_assets(theme_mode=theme_mode) + body_html
+        html = PREVIEW_STYLE + self._preview_theme_assets(theme_mode=theme_mode)
         if interactive:
-            html += self._preview_interaction_assets()
-        return html
+            html += self._preview_interaction_assets(theme_mode=theme_mode)
+        return html + body_html
 
     def _build_preview_shell_html(self, theme_mode=None):
         body_html = self._pending_preview_body_html or ""
         return (
             PREVIEW_STYLE
             + self._preview_theme_assets(theme_mode=theme_mode)
+            + self._preview_interaction_assets(theme_mode=theme_mode)
             + "<div id=\"preview-content\"></div>"
-            + self._preview_interaction_assets()
             + f"<script>window.renderPreviewContent({json.dumps(body_html)});</script>"
         )
 
@@ -2284,7 +2414,7 @@ class MainWindow(QMainWindow):
         self._preview_loaded = False
         self._preview_base_url = base_url
         self._preview_shell_key = shell_key
-        self.preview.setHtml(self._build_preview_shell_html(), base_url)
+        self.preview.setHtml(self._build_preview_shell_html(theme_mode=self.theme_mode), base_url)
 
     def _apply_preview_content(self):
         if not self._preview_loaded:
@@ -2315,33 +2445,54 @@ class MainWindow(QMainWindow):
 """
 
     def _preview_theme_assets(self, theme_mode=None):
-        active_theme = theme_mode or self.theme_mode
-        if active_theme == "dark":
-            return """
+        palette = self._theme_palette(theme_mode=theme_mode)
+        return f"""
 <style>
-  body, p, li, td, th, blockquote { color: #e6edf3; background: #22272e; }
-  body { background: #22272e; }
-  code, .code-wrapper { background: #2d333b !important; color: #e6edf3 !important; border-color: #444c56 !important; }
-  th, tr:nth-child(even) { background: #2d333b; }
-  td, th { border-color: #444c56; }
-  blockquote { color: #adbac7; border-left-color: #768390; }
-  a { color: #6cb6ff; }
+  meta[http-equiv="Content-Security-Policy"] {{
+    display: none;
+  }}
+  html, body {{
+    background: {palette["panel_bg"]};
+  }}
+  body, p, li, td, th, blockquote {{
+    color: {palette["text"]};
+  }}
+  code, .code-wrapper {{
+    background: {palette["code_bg"]} !important;
+    color: {palette["code_text"]} !important;
+    border-color: {palette["code_border"]} !important;
+  }}
+  th {{
+    background: {palette["table_header_bg"]};
+  }}
+  tr:nth-child(even) {{
+    background: {palette["table_alt_bg"]};
+  }}
+  td, th {{
+    border-color: {palette["panel_border"]};
+  }}
+  blockquote {{
+    color: {palette["muted_text"]};
+    border-left-color: {palette["blockquote_border"]};
+  }}
+  hr {{
+    border-top-color: {palette["hr"]};
+  }}
+  a {{
+    color: {palette["link"]};
+  }}
 </style>
 """
-        return ""
 
-    def _preview_interaction_assets(self):
+    def _preview_interaction_assets(self, theme_mode=None):
+        palette = self._theme_palette(theme_mode=theme_mode)
         copy_label = self._tr("Copy")
         copied_label = self._tr("Copied")
         return f"""
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: file:; style-src 'unsafe-inline'; script-src 'unsafe-inline' qrc:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
 <style>
   .code-wrapper {{
     position: relative;
-    margin: 1.5em 0;
-    border: 1px solid #6b7280;
-    background: #4b5563;
-    border-radius: 4px;
-    padding: 14px 18px;
   }}
   .copy-btn {{
     position: absolute;
@@ -2349,24 +2500,18 @@ class MainWindow(QMainWindow):
     right: 8px;
     padding: 3px 10px;
     font-size: 0.75em;
-    background: #6b7280;
-    color: #f8fafc;
-    border: 1px solid #9ca3af;
+    background: {palette["copy_button_bg"]};
+    color: {palette["text"]};
+    border: 1px solid {palette["copy_button_border"]};
     border-radius: 4px;
     cursor: pointer;
     opacity: 0.7;
   }}
-  .copy-btn:hover {{ opacity: 1; }}
-  input[type="checkbox"] {{
-    width: 1em;
-    height: 1em;
-    margin-right: 6px;
-    cursor: pointer;
-    accent-color: #0066cc;
+  .copy-btn:hover {{
+    opacity: 1;
   }}
-  li:has(input[type="checkbox"]) {{
-    list-style: none;
-    margin-left: -1.5em;
+  input[type="checkbox"] {{
+    cursor: pointer;
   }}
 </style>
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
@@ -2408,34 +2553,39 @@ class MainWindow(QMainWindow):
     }});
   }}
 
-  function wirePreviewInteractions() {{
-    const container = document.getElementById('preview-content');
-    if (!container) return;
-
-    container.querySelectorAll('.copy-btn').forEach(function(btn) {{
-      if (btn.dataset.copyBound === '1') return;
-      btn.dataset.copyBound = '1';
+  function bindCopyButtons() {{
+    document.querySelectorAll('.copy-btn').forEach(function(btn) {{
+      if (btn.dataset.bound === '1') return;
+      btn.dataset.bound = '1';
       btn.addEventListener('click', function() {{
-        var targetId = btn.getAttribute('data-copy-target');
-        var pre = document.getElementById(targetId);
+        const targetId = btn.getAttribute('data-copy-target');
+        const pre = document.getElementById(targetId);
         if (!pre || !window.previewBridge) return;
         window.previewBridge.copyText(pre.innerText);
         btn.textContent = {copied_label!r};
-        setTimeout(function() {{ btn.textContent = {copy_label!r}; }}, 2000);
-      }});
-    }});
-
-    container.querySelectorAll('input[type="checkbox"]').forEach(function(cb, index) {{
-      cb.removeAttribute('disabled');
-      if (cb.dataset.toggleBound === '1') return;
-      cb.dataset.toggleBound = '1';
-      cb.addEventListener('change', function() {{
-        if (window.previewBridge) {{
-          window.previewBridge.toggleCheckbox(index, cb.checked);
-        }}
+        setTimeout(function() {{
+          btn.textContent = {copy_label!r};
+        }}, 1200);
       }});
     }});
   }}
+
+  function bindCheckboxes() {{
+    document.querySelectorAll('input[type="checkbox"]').forEach(function(cb, index) {{
+      cb.removeAttribute('disabled');
+      if (cb.dataset.bound === '1') return;
+      cb.dataset.bound = '1';
+      cb.addEventListener('change', function() {{
+        if (!window.previewBridge) return;
+        window.previewBridge.toggleCheckbox(index, cb.checked);
+      }});
+    }});
+  }}
+
+  window.setPreviewScrollRatio = function(ratio) {{
+    const scrollMax = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    window.scrollTo(0, scrollMax * ratio);
+  }};
 
   window.renderPreviewContent = function(html) {{
     const container = document.getElementById('preview-content');
@@ -2444,78 +2594,30 @@ class MainWindow(QMainWindow):
     template.innerHTML = html;
     reuseExistingImages(template.content, container);
     container.replaceChildren(...Array.from(template.content.childNodes));
-    wirePreviewInteractions();
-  }};
-
-  window.setPreviewScrollRatio = function(ratio) {{
-    const scrollMax = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-    window.scrollTo(0, scrollMax * ratio);
+    bindCopyButtons();
+    bindCheckboxes();
   }};
 
   document.addEventListener('DOMContentLoaded', function() {{
     new QWebChannel(qt.webChannelTransport, function(channel) {{
       window.previewBridge = channel.objects.previewBridge;
-      wirePreviewInteractions();
+      bindCopyButtons();
+      bindCheckboxes();
     }});
   }});
 </script>
 """
 
-    def _copy_preview_image(self, encoded_src):
-        src = url_unquote(encoded_src)
-        image = QImage()
-
-        if src.startswith("data:image/"):
-            try:
-                _, encoded_data = src.split(",", 1)
-                image.loadFromData(base64.b64decode(encoded_data))
-            except Exception:
-                return
-        else:
-            path = QUrl(src).toLocalFile() if src.startswith("file://") else src
-            if not image.load(path):
-                return
-
-        if image.isNull():
-            return
-
-        QApplication.clipboard().setImage(image)
-        self.statusBar().showMessage(self._tr("Image copied"), 2000)
-
-    def _copy_preview_text(self, text):
-        QApplication.clipboard().setText(text)
-
     def _show_preview_context_menu(self, pos):
-        x = pos.x()
-        y = pos.y()
-        script = f"""
-        (function() {{
-          const el = document.elementFromPoint({x}, {y});
-          if (!el) return '';
-          if (el.tagName === 'IMG') return el.src || '';
-          let parent = el.parentElement;
-          while (parent) {{
-            if (parent.tagName === 'IMG') return parent.src || '';
-            parent = parent.parentElement;
-          }}
-          return '';
-        }})();
-        """
-        self.preview.page().runJavaScript(script, lambda src: self._handle_preview_context_result(src, pos))
-
-    def _handle_preview_context_result(self, src, pos):
         menu = QMenu(self)
         copy_text_action = menu.addAction(self._tr("Copy"))
-        copy_image_action = None
-        if src:
-            menu.addSeparator()
-            copy_image_action = menu.addAction(self._tr("Copy Image"))
         chosen = menu.exec(self.preview.mapToGlobal(pos))
 
         if chosen == copy_text_action:
             self.preview.triggerPageAction(QWebEnginePage.WebAction.Copy)
-        elif chosen == copy_image_action:
-            self._copy_preview_image(src)
+
+    def _copy_preview_text(self, text):
+        QApplication.clipboard().setText(text)
 
     def _style_headings(self, html):
         heading_styles = {
@@ -2553,11 +2655,8 @@ class MainWindow(QMainWindow):
                     f'<button class="copy-btn" data-copy-target="{pre_id}" type="button">'
                     f'{self._tr("Copy")}</button>'
                 )
-                wrapper_class = 'code-wrapper'
-            else:
-                wrapper_class = ''
             return (
-                f'<div class="{wrapper_class}" style="{wrapper_style}">'
+                f'<div class="code-wrapper" style="{wrapper_style}">'
                 f'{button_html}'
                 f'<pre id="{pre_id}" style="margin: 0; white-space: pre-wrap; '
                 'font-family: \'Courier New\', Courier, monospace; '
@@ -2591,6 +2690,7 @@ class MainWindow(QMainWindow):
 
         self._pdf_path = path
         self._web_view = QWebEngineView()
+        self._configure_web_view_security(self._web_view)
         self._web_view.loadFinished.connect(self._on_page_loaded)
         self._web_view.setHtml(html, QUrl("about:blank"))
 
