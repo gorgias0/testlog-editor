@@ -140,7 +140,7 @@ TESTDATA_PROFILES = {
         "faker_locale": "en_GB",
         "name_label": "Name:",
         "address_label": "Address:",
-        "id_label": "National Insurance No.:",
+        "id_label": "Insurance No.:",
         "email_label": "Email:",
         "phone_label": "Phone:",
         "phone_intl_label": "Phone +44:",
@@ -177,6 +177,36 @@ TESTDATA_PROFILES = {
         "org_generator": "_generate_us_ein",
         "vat_generator": "_generate_us_tax_id",
     },
+}
+
+TESTDATA_COMPANY_SUFFIXES = {
+    "se": "AB",
+    "no": "AS",
+    "dk": "ApS",
+    "fi": "Oy",
+    "is": "ehf.",
+    "uk": "Ltd",
+    "us": "LLC",
+}
+
+TESTDATA_EMAIL_TLDS = {
+    "se": "se",
+    "no": "no",
+    "dk": "dk",
+    "fi": "fi",
+    "is": "is",
+    "uk": "co.uk",
+    "us": "com",
+}
+
+TESTDATA_COMPANY_WORDS = {
+    "se": ["Teknik", "Konsult", "Logistik", "Bygg"],
+    "no": ["Service", "Teknikk", "Drift", "Bygg"],
+    "dk": ["Data", "Service", "Logistik", "Teknik"],
+    "fi": ["Solutions", "Huolto", "Data", "Palvelut"],
+    "is": ["Lausnir", "THjonusta", "Verkfraedi", "Honnun"],
+    "uk": ["Consulting", "Services", "Logistics", "Digital"],
+    "us": ["Solutions", "Consulting", "Logistics", "Systems"],
 }
 
 
@@ -479,32 +509,29 @@ class TextToolDialog(QDialog):
     def _generate_testdata(self, locale_code="se"):
         profile = TESTDATA_PROFILES[locale_code]
         faker = self._faker(profile["faker_locale"])
-        first_name = faker.first_name()
-        last_name = faker.last_name()
+        context = self._build_testdata_context(faker, locale_code)
         street = faker.street_address().replace("\n", ", ")
         postal_code = faker.postcode().replace("\n", " ")
         city = faker.city().replace("\n", " ")
         identity_value = getattr(self, profile["id_generator"])()
-        email = faker.email()
         landline = getattr(self, profile["landline_generator"])()
         landline_intl = self._to_international_phone(landline, profile["country_code"])
         mobile = getattr(self, profile["mobile_generator"])()
         mobile_intl = self._to_international_phone(mobile, profile["country_code"])
-        company_name = faker.company().replace("\n", " ")
         org_number = getattr(self, profile["org_generator"])()
         vat_number = getattr(self, profile["vat_generator"])()
         field_width = 18
         rows = [
-            (profile["name_label"], f"{first_name} {last_name}"),
+            (profile["name_label"], context["full_name"]),
             (profile["address_label"], f"{street}, {postal_code} {city}"),
             (profile["id_label"], identity_value),
-            (profile["email_label"], email),
+            (profile["email_label"], context["email"]),
             (profile["phone_label"], landline),
             (profile["phone_intl_label"], landline_intl),
             (profile["mobile_label"], mobile),
             (profile["mobile_intl_label"], mobile_intl),
             ("", ""),
-            (profile["company_label"], company_name),
+            (profile["company_label"], context["company_name"]),
             (profile["org_label"], org_number),
             (profile["vat_label"], vat_number),
         ]
@@ -522,6 +549,50 @@ class TextToolDialog(QDialog):
             faker = Faker(locale_name)
             self._faker_by_locale[locale_name] = faker
         return faker
+
+    def _build_testdata_context(self, faker, locale_code):
+        first_name = faker.first_name()
+        last_name = faker.last_name()
+        company_name = self._build_company_name(last_name, locale_code)
+        email = self._build_email_address(first_name, last_name, company_name, locale_code)
+        return {
+            "first_name": first_name,
+            "last_name": last_name,
+            "full_name": f"{first_name} {last_name}",
+            "company_name": company_name,
+            "email": email,
+        }
+
+    def _build_company_name(self, last_name, locale_code):
+        company_word = random.choice(TESTDATA_COMPANY_WORDS[locale_code])
+        company_suffix = TESTDATA_COMPANY_SUFFIXES[locale_code]
+        return f"{last_name} {company_word} {company_suffix}"
+
+    def _build_email_address(self, first_name, last_name, company_name, locale_code):
+        local_part = ".".join(
+            part
+            for part in (
+                self._normalize_email_name(first_name),
+                self._normalize_email_name(last_name),
+            )
+            if part
+        )
+        if not local_part:
+            local_part = "test.user"
+        domain_name = self._build_company_domain(company_name, locale_code)
+        return f"{local_part}@{domain_name}"
+
+    def _build_company_domain(self, company_name, locale_code):
+        domain_parts = [
+            self._normalize_email_name(part)
+            for part in company_name.split()
+            if self._normalize_email_name(part)
+            and self._normalize_email_name(part)
+            not in {self._normalize_email_name(TESTDATA_COMPANY_SUFFIXES[locale_code])}
+        ]
+        if not domain_parts:
+            domain_parts = ["example"]
+        return f"{''.join(domain_parts)}.{TESTDATA_EMAIL_TLDS[locale_code]}"
 
     def _append_special_character_sections(self, selected_keys):
         sections = []
