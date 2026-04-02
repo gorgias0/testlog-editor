@@ -67,6 +67,7 @@ TRANSLATIONS = {
         "English": "Engelska",
         "Swedish": "Svenska",
         "Text Tool": "Textverktyg",
+        "Show/hide preview (Ctrl+Shift+P)": "Visa/dölj förhandsgranskning (Ctrl+Shift+P)",
         "Paste text here...": "Klistra in text här...",
         "Characters: {with_ws} | Without whitespace: {without_ws} | Cursor: {cursor_pos}": "Tecken: {with_ws} | Utan blanksteg: {without_ws} | Markör: {cursor_pos}",
         "Editor Count: {with_ws} | No ws: {without_ws} | Selected: {sel_with_ws} | Selected no ws: {sel_without_ws}":

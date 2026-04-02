@@ -17,9 +17,9 @@ from PySide6.QtWidgets import (
     QPushButton, QHBoxLayout, QInputDialog,
     QToolBar, QStatusBar, QLabel,
     QMenu, QMessageBox,
-    QLineEdit, QStyle
+    QLineEdit, QStyle, QSizePolicy, QToolButton
 )
-from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QObject, Slot, QItemSelectionModel
+from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QObject, Slot, QItemSelectionModel, QSize
 from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument, QTextCharFormat, QSyntaxHighlighter
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
@@ -48,6 +48,29 @@ try:
     from mdit_py_plugins.tasklists import tasklists_plugin
 except ImportError:
     tasklists_plugin = None
+
+PREVIEW_ON_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 56">
+  <rect x="0" y="0" width="34" height="56" rx="4" fill="#888" opacity="0.5"/>
+  <rect x="4" y="8" width="26" height="3" rx="1" fill="white" opacity="0.7"/>
+  <rect x="4" y="15" width="20" height="3" rx="1" fill="white" opacity="0.7"/>
+  <rect x="4" y="22" width="24" height="3" rx="1" fill="white" opacity="0.7"/>
+  <rect x="4" y="29" width="18" height="3" rx="1" fill="white" opacity="0.7"/>
+  <rect x="38" y="0" width="34" height="56" rx="4" fill="#2280e0"/>
+  <rect x="42" y="8" width="26" height="3" rx="1" fill="white" opacity="0.8"/>
+  <rect x="42" y="15" width="20" height="3" rx="1" fill="white" opacity="0.8"/>
+  <rect x="42" y="22" width="22" height="3" rx="1" fill="white" opacity="0.8"/>
+  <rect x="42" y="29" width="16" height="3" rx="1" fill="white" opacity="0.8"/>
+</svg>'''
+
+PREVIEW_OFF_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 56">
+  <rect x="0" y="0" width="72" height="56" rx="4" fill="#888" opacity="0.5"/>
+  <rect x="4" y="8" width="64" height="3" rx="1" fill="white" opacity="0.7"/>
+  <rect x="4" y="15" width="52" height="3" rx="1" fill="white" opacity="0.7"/>
+  <rect x="4" y="22" width="58" height="3" rx="1" fill="white" opacity="0.7"/>
+  <rect x="4" y="29" width="44" height="3" rx="1" fill="white" opacity="0.7"/>
+  <line x1="48" y1="34" x2="68" y2="54" stroke="#ef4444" stroke-width="3" stroke-linecap="round"/>
+  <line x1="68" y1="34" x2="48" y2="54" stroke="#ef4444" stroke-width="3" stroke-linecap="round"/>
+</svg>'''
 
 class Editor(QTextEdit):
     def __init__(self, on_image_paste):
@@ -715,6 +738,9 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geometry)
         self._setup_menu()
         self._setup_toolbar()
+        preview_visible = self.settings.value("preview_visible", True, type=bool)
+        self.toggle_preview_btn.setChecked(preview_visible)
+        self.toggle_preview(preview_visible)
         self._configure_focus_navigation()
         self._apply_theme()
         self._retranslate_ui()
@@ -791,6 +817,25 @@ class MainWindow(QMainWindow):
             settings.setUnknownUrlSchemePolicy(
                 QWebEngineSettings.UnknownUrlSchemePolicy.DisallowUnknownUrlSchemes
             )
+
+    def _preview_toggle_button_stylesheet(self, theme_mode=None):
+        palette = self._theme_palette(theme_mode=theme_mode)
+        return f"""
+            QToolButton {{
+                background: {palette["chrome_bg"]};
+                color: {palette["text"]};
+                border: 1px solid {palette["panel_border"]};
+                border-radius: 4px;
+                padding: 2px;
+            }}
+            QToolButton:hover {{
+                background: {palette["chrome_hover"]};
+            }}
+            QToolButton:checked {{
+                background: {palette["copy_button_bg"]};
+                border-color: {palette["copy_button_border"]};
+            }}
+        """
 
     def _sanitize_preview_url(self, value, attribute_name):
         parsed = urlparse(value)
@@ -940,6 +985,8 @@ class MainWindow(QMainWindow):
                 f"background: {palette['panel_bg']}; border: 1px solid {palette['panel_border']};"
             )
             self.preview.page().setBackgroundColor(QColor(palette["panel_bg"]))
+        if hasattr(self, "toggle_preview_btn"):
+            self.toggle_preview_btn.setStyleSheet(self._preview_toggle_button_stylesheet())
         if hasattr(self, "editor_highlighter"):
             self.editor_highlighter.set_theme_mode(self.theme_mode)
 
@@ -1226,6 +1273,23 @@ class MainWindow(QMainWindow):
         self.toolbar_text_tool_action.triggered.connect(self.open_text_tool)
         self.toolbar.addAction(self.toolbar_text_tool_action)
 
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.toolbar.addWidget(spacer)
+
+        self.toggle_preview_btn = QToolButton()
+        self.toggle_preview_btn.setIcon(icon_from_svg(PREVIEW_ON_ICON_SVG, size=32))
+        self.toggle_preview_btn.setIconSize(QSize(32, 24))
+        self.toggle_preview_btn.setCheckable(True)
+        self.toggle_preview_btn.setChecked(True)
+        self.toggle_preview_btn.setFixedSize(44, 32)
+        self.toggle_preview_btn.setStyleSheet(self._preview_toggle_button_stylesheet())
+        self.toggle_preview_btn.clicked.connect(self.toggle_preview)
+        self.toolbar.addWidget(self.toggle_preview_btn)
+
+        self.preview_shortcut = QShortcut(QKeySequence("Ctrl+Shift+P"), self)
+        self.preview_shortcut.activated.connect(lambda: self.toggle_preview_btn.click())
+
     def _retranslate_ui(self):
         self.file_menu.setTitle(self._with_mnemonic(self._tr("File")))
         self.edit_menu.setTitle(self._with_mnemonic(self._tr("Edit")))
@@ -1313,6 +1377,7 @@ class MainWindow(QMainWindow):
         self.toolbar_date_action.setToolTip(self._tr("Insert date (Ctrl+Alt+D)"))
         self.toolbar_text_tool_action.setText(self._tr("Text Tool"))
         self.toolbar_text_tool_action.setToolTip(self._tr("Text Tool"))
+        self.toggle_preview_btn.setToolTip(self._tr("Show/hide preview (Ctrl+Shift+P)"))
 
         self.btn_new_file.setText(self._tr("+ New File"))
         self.btn_new_folder.setText(self._tr("+ Folder"))
@@ -1624,7 +1689,24 @@ class MainWindow(QMainWindow):
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("outer_splitter", self.outer_splitter.saveState())
         self.settings.setValue("inner_splitter", self.inner_splitter.saveState())
+        self.settings.setValue("preview_visible", self.toggle_preview_btn.isChecked())
         super().closeEvent(event)
+
+    def toggle_preview(self, checked: bool):
+        if checked:
+            self.toggle_preview_btn.setIcon(icon_from_svg(PREVIEW_ON_ICON_SVG, size=32))
+        else:
+            self.toggle_preview_btn.setIcon(icon_from_svg(PREVIEW_OFF_ICON_SVG, size=32))
+        if not checked:
+            self.settings.setValue("inner_splitter_sizes", self.inner_splitter.saveState())
+        self.preview.setVisible(checked)
+        if checked:
+            sizes = self.settings.value("inner_splitter_sizes")
+            if sizes:
+                self.inner_splitter.restoreState(sizes)
+            else:
+                total = self.inner_splitter.width()
+                self.inner_splitter.setSizes([total // 2, total // 2])
 
     def _editor_selected_or_all_text(self):
         cursor = self.editor.textCursor()
