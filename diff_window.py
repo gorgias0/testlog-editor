@@ -1,3 +1,5 @@
+import json
+
 from PySide6.QtCore import Qt, QTimer, QRect, QSize
 from PySide6.QtGui import QColor, QTextCursor, QTextFormat, QPainter
 from PySide6.QtWidgets import (
@@ -7,6 +9,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QMessageBox,
     QSplitter,
     QTextEdit,
     QVBoxLayout,
@@ -132,6 +135,12 @@ class DiffWindow(QDialog):
         self.next_change_button = QPushButton(self._tr("Next"))
         self.next_change_button.clicked.connect(self.go_to_next_change)
         top_row.addWidget(self.next_change_button)
+        self.format_json_a_button = QPushButton(self._tr("Format JSON A"))
+        self.format_json_a_button.clicked.connect(lambda: self.format_json_pane("a"))
+        top_row.addWidget(self.format_json_a_button)
+        self.format_json_b_button = QPushButton(self._tr("Format JSON B"))
+        self.format_json_b_button.clicked.connect(lambda: self.format_json_pane("b"))
+        top_row.addWidget(self.format_json_b_button)
         self.change_counter_label = QLabel("")
         top_row.addWidget(self.change_counter_label)
         self.ignore_whitespace_checkbox = QCheckBox(self._tr("Ignore Whitespace"))
@@ -221,6 +230,24 @@ class DiffWindow(QDialog):
     def clear_texts(self):
         self.pane_a.clear()
         self.pane_b.clear()
+        self.update_diff()
+
+    def format_json_pane(self, pane_name):
+        editor = self.pane_a if pane_name == "a" else self.pane_b
+        text = editor.toPlainText()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as error:
+            QMessageBox.warning(
+                self,
+                self._tr("Format JSON"),
+                self._tr("Invalid JSON: {error}").format(error=str(error)),
+            )
+            editor.setFocus()
+            return
+
+        editor.setPlainText(json.dumps(parsed, indent=2, ensure_ascii=False))
+        editor.setFocus()
         self.update_diff()
 
     def _schedule_diff_update(self):

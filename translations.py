@@ -72,6 +72,8 @@ TRANSLATIONS = {
         "Diff...": "Diff...",
         "Previous": "Föregående",
         "Next": "Nästa",
+        "Format JSON A": "Formatera JSON A",
+        "Format JSON B": "Formatera JSON B",
         "Ignore Whitespace": "Ignorera blanksteg",
         "Ignore Blank Lines": "Ignorera tomma rader",
         "No Changes": "Inga ändringar",

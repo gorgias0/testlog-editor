@@ -1422,6 +1422,8 @@ class MainWindow(QMainWindow):
             self.diff_window.setWindowTitle(self._tr("Diff"))
             self.diff_window.previous_change_button.setText(self._tr("Previous"))
             self.diff_window.next_change_button.setText(self._tr("Next"))
+            self.diff_window.format_json_a_button.setText(self._tr("Format JSON A"))
+            self.diff_window.format_json_b_button.setText(self._tr("Format JSON B"))
             self.diff_window.ignore_whitespace_checkbox.setText(self._tr("Ignore Whitespace"))
             self.diff_window.ignore_blank_lines_checkbox.setText(self._tr("Ignore Blank Lines"))
             self.diff_window.clear_button.setText(self._tr("Clear"))
