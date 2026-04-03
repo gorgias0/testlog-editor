@@ -50,27 +50,18 @@ try:
 except ImportError:
     tasklists_plugin = None
 
-PREVIEW_ON_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 56">
-  <rect x="0" y="0" width="34" height="56" rx="4" fill="#888" opacity="0.5"/>
-  <rect x="4" y="8" width="26" height="3" rx="1" fill="white" opacity="0.7"/>
-  <rect x="4" y="15" width="20" height="3" rx="1" fill="white" opacity="0.7"/>
-  <rect x="4" y="22" width="24" height="3" rx="1" fill="white" opacity="0.7"/>
-  <rect x="4" y="29" width="18" height="3" rx="1" fill="white" opacity="0.7"/>
-  <rect x="38" y="0" width="34" height="56" rx="4" fill="#2280e0"/>
-  <rect x="42" y="8" width="26" height="3" rx="1" fill="white" opacity="0.8"/>
-  <rect x="42" y="15" width="20" height="3" rx="1" fill="white" opacity="0.8"/>
-  <rect x="42" y="22" width="22" height="3" rx="1" fill="white" opacity="0.8"/>
-  <rect x="42" y="29" width="16" height="3" rx="1" fill="white" opacity="0.8"/>
+PREVIEW_ON_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 52">
+  <rect x="0" y="0" width="72" height="52" rx="6" fill="none" stroke="#888" stroke-width="2"/>
+  <line x1="36" y1="2" x2="36" y2="50" stroke="#888" stroke-width="1.5"/>
+  <rect x="3" y="3" width="30" height="46" rx="4" fill="#555"/>
+  <rect x="39" y="3" width="30" height="46" rx="4" fill="#bbb"/>
 </svg>'''
 
-PREVIEW_OFF_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 56">
-  <rect x="0" y="0" width="72" height="56" rx="4" fill="#888" opacity="0.5"/>
-  <rect x="4" y="8" width="64" height="3" rx="1" fill="white" opacity="0.7"/>
-  <rect x="4" y="15" width="52" height="3" rx="1" fill="white" opacity="0.7"/>
-  <rect x="4" y="22" width="58" height="3" rx="1" fill="white" opacity="0.7"/>
-  <rect x="4" y="29" width="44" height="3" rx="1" fill="white" opacity="0.7"/>
-  <line x1="48" y1="34" x2="68" y2="54" stroke="#ef4444" stroke-width="3" stroke-linecap="round"/>
-  <line x1="68" y1="34" x2="48" y2="54" stroke="#ef4444" stroke-width="3" stroke-linecap="round"/>
+PREVIEW_OFF_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 52">
+  <rect x="0" y="0" width="72" height="52" rx="6" fill="none" stroke="#888" stroke-width="2"/>
+  <line x1="36" y1="2" x2="36" y2="50" stroke="#888" stroke-width="1.5"/>
+  <rect x="3" y="3" width="30" height="46" rx="4" fill="#555"/>
+  <rect x="39" y="3" width="30" height="46" rx="4" fill="#555"/>
 </svg>'''
 
 class Editor(QTextEdit):
@@ -784,6 +775,9 @@ class MainWindow(QMainWindow):
                 "hr": "#444c56",
                 "copy_button_bg": "#3a424d",
                 "copy_button_border": "#667281",
+                "scrollbar_track": "#232830",
+                "scrollbar_thumb": "#566170",
+                "scrollbar_thumb_hover": "#6b7788",
             }
         return {
             "window_bg": "#e9edf3",
@@ -803,7 +797,102 @@ class MainWindow(QMainWindow):
             "hr": "#d6dee8",
             "copy_button_bg": "#d7dee8",
             "copy_button_border": "#b4c0ce",
+            "scrollbar_track": "#edf2f7",
+            "scrollbar_thumb": "#b8c3d1",
+            "scrollbar_thumb_hover": "#9aa9bb",
         }
+
+    def _editor_scrollbar_stylesheet(self, theme_mode=None):
+        palette = self._theme_palette(theme_mode=theme_mode)
+        return f"""
+        QScrollBar:vertical {{
+            background: {palette["scrollbar_track"]};
+            width: 12px;
+            margin: 0;
+            border-left: 1px solid {palette["panel_border"]};
+        }}
+        QScrollBar::handle:vertical {{
+            background: {palette["scrollbar_thumb"]};
+            min-height: 28px;
+            border-radius: 6px;
+            margin: 2px;
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background: {palette["scrollbar_thumb_hover"]};
+        }}
+        QScrollBar:horizontal {{
+            background: {palette["scrollbar_track"]};
+            height: 12px;
+            margin: 0;
+            border-top: 1px solid {palette["panel_border"]};
+        }}
+        QScrollBar::handle:horizontal {{
+            background: {palette["scrollbar_thumb"]};
+            min-width: 28px;
+            border-radius: 6px;
+            margin: 2px;
+        }}
+        QScrollBar::handle:horizontal:hover {{
+            background: {palette["scrollbar_thumb_hover"]};
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+            background: none;
+            border: none;
+            width: 0;
+            height: 0;
+        }}
+        """
+
+    def _preview_scrollbar_css(self, theme_mode=None):
+        palette = self._theme_palette(theme_mode=theme_mode)
+        return f"""
+  html {{
+    scrollbar-color: {palette["scrollbar_thumb"]} {palette["scrollbar_track"]};
+  }}
+  ::-webkit-scrollbar {{
+    width: 12px;
+    height: 12px;
+  }}
+  ::-webkit-scrollbar-track {{
+    background: {palette["scrollbar_track"]};
+  }}
+  ::-webkit-scrollbar-thumb {{
+    background: {palette["scrollbar_thumb"]};
+    border-radius: 6px;
+    border: 2px solid {palette["scrollbar_track"]};
+  }}
+  ::-webkit-scrollbar-thumb:hover {{
+    background: {palette["scrollbar_thumb_hover"]};
+  }}
+  ::-webkit-scrollbar-corner {{
+    background: {palette["scrollbar_track"]};
+  }}
+"""
+
+    def _toolbar_stylesheet(self, theme_mode=None):
+        palette = self._theme_palette(theme_mode=theme_mode)
+        return f"""
+            QToolBar {{
+                spacing: 4px;
+                padding: 4px;
+                background: {palette["chrome_bg"]};
+                border: none;
+            }}
+            QToolButton {{
+                min-width: 34px;
+                min-height: 30px;
+                font-size: 13px;
+                padding: 4px 8px;
+            }}
+            QToolBar::separator {{
+                background: {palette["panel_border"]};
+                width: 1px;
+                margin: 4px 8px;
+            }}
+        """
 
     def _configure_web_view_security(self, web_view, *, allow_javascript=False):
         settings = web_view.settings()
@@ -959,6 +1048,10 @@ class MainWindow(QMainWindow):
                 background: {palette["window_bg"]};
                 color: {palette["text"]};
             }}
+            QLabel {{
+                background: transparent;
+                color: {palette["text"]};
+            }}
             QMenuBar, QMenuBar::item, QMenu, QStatusBar, QToolBar {{
                 background: {palette["chrome_bg"]};
                 color: {palette["text"]};
@@ -966,10 +1059,19 @@ class MainWindow(QMainWindow):
             QMenu::item:selected, QMenuBar::item:selected {{
                 background: {palette["chrome_hover"]};
             }}
-            QTreeView, QListWidget {{
-                background: {palette["chrome_bg"]};
+            QTreeView, QListWidget, QListView, QLineEdit, QTextEdit, QPlainTextEdit {{
+                background: {palette["panel_bg"]};
                 color: {palette["text"]};
                 border: 1px solid {palette["panel_border"]};
+            }}
+            QTreeView::item:selected, QListView::item:selected {{
+                background: {palette["chrome_hover"]};
+                color: {palette["text"]};
+            }}
+            QLineEdit {{
+                selection-background-color: {palette["chrome_hover"]};
+                selection-color: {palette["text"]};
+                padding: 4px 6px;
             }}
             QPushButton {{
                 background: {palette["chrome_bg"]};
@@ -978,11 +1080,25 @@ class MainWindow(QMainWindow):
                 padding: 4px 8px;
             }}
             QPushButton:hover {{ background: {palette["chrome_hover"]}; }}
+            QSplitter::handle {{
+                background: {palette["chrome_bg"]};
+            }}
+            QSplitter::handle:hover {{
+                background: {palette["chrome_hover"]};
+            }}
+            {self._editor_scrollbar_stylesheet()}
             """
         )
         if hasattr(self, "editor"):
             self.editor.setStyleSheet(
-                f"background: {palette['panel_bg']}; color: {palette['text']}; border: 1px solid {palette['panel_border']};"
+                f"""
+                QTextEdit {{
+                    background: {palette['panel_bg']};
+                    color: {palette['text']};
+                    border: 1px solid {palette['panel_border']};
+                }}
+                {self._editor_scrollbar_stylesheet()}
+                """
             )
         if self.diff_window is not None:
             self.diff_window.apply_theme(palette)
@@ -993,6 +1109,8 @@ class MainWindow(QMainWindow):
             self.preview.page().setBackgroundColor(QColor(palette["panel_bg"]))
         if hasattr(self, "toggle_preview_btn"):
             self.toggle_preview_btn.setStyleSheet(self._preview_toggle_button_stylesheet())
+        if hasattr(self, "toolbar"):
+            self.toolbar.setStyleSheet(self._toolbar_stylesheet())
         if hasattr(self, "editor_highlighter"):
             self.editor_highlighter.set_theme_mode(self.theme_mode)
 
@@ -1213,11 +1331,7 @@ class MainWindow(QMainWindow):
         self.toolbar = QToolBar("Formatting")
         self.toolbar.setMovable(False)
         self.toolbar.setIconSize(self.toolbar.iconSize().expandedTo(self.toolbar.iconSize()))
-        self.toolbar.setStyleSheet(
-            "QToolBar { spacing: 4px; padding: 4px; }"
-            "QToolButton { min-width: 34px; min-height: 30px; font-size: 13px; padding: 4px 8px; }"
-            "QToolBar::separator { background: #b8b8b8; width: 1px; margin: 4px 8px; }"
-        )
+        self.toolbar.setStyleSheet(self._toolbar_stylesheet())
         self.addToolBar(self.toolbar)
 
         self.toolbar_bold_action = QAction(self)
@@ -1485,7 +1599,7 @@ class MainWindow(QMainWindow):
         self.tree.hideColumn(3)
         self.tree.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self.tree.clicked.connect(self.tree_item_clicked)
-        self.tree.activated.connect(self.tree_item_clicked)
+        self.tree.doubleClicked.connect(self.tree_item_double_clicked)
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
         sidebar_layout.addWidget(self.tree)
 
@@ -2047,13 +2161,19 @@ class MainWindow(QMainWindow):
 
     def rename_item(self, path):
         current_name = Path(path).name if os.path.isdir(path) else Path(path).stem
-        new_name, ok = QInputDialog.getText(
-            self,
-            self._tr("Rename"),
-            self._tr("Filename (without .testlog):"),
-            text=current_name,
-        )
-        if not ok or not new_name.strip():
+        dialog = QInputDialog(self)
+        dialog.setInputMode(QInputDialog.InputMode.TextInput)
+        dialog.setWindowTitle(self._tr("Rename"))
+        dialog.setLabelText(self._tr("Filename (without .testlog):"))
+        dialog.setTextValue(current_name)
+        dialog.resize(460, dialog.sizeHint().height())
+        QTimer.singleShot(0, lambda: self._position_rename_dialog_cursor(dialog, current_name))
+
+        if dialog.exec() != QInputDialog.DialogCode.Accepted:
+            return
+
+        new_name = dialog.textValue()
+        if not new_name.strip():
             return
 
         new_path = os.path.join(
@@ -2063,12 +2183,32 @@ class MainWindow(QMainWindow):
         if new_path == path:
             return
 
-        os.rename(path, new_path)
+        current_abs = os.path.abspath(self.current_file) if self.current_file else None
+        path_abs = os.path.abspath(path)
+
+        if not os.path.isdir(path) and current_abs == path_abs:
+            self.autosave_timer.stop()
+            self._write_testlog(new_path)
+            if os.path.exists(path):
+                os.remove(path)
+        else:
+            os.rename(path, new_path)
 
         self._update_tracked_paths(path, new_path)
 
         self.refresh_pinned()
+        if current_abs == path_abs:
+            self.current_file = new_path
+            self.setWindowTitle(self._window_title(os.path.basename(new_path)))
         self._select_file_in_tree(new_path)
+
+    def _position_rename_dialog_cursor(self, dialog, current_name):
+        line_edit = dialog.findChild(QLineEdit)
+        if line_edit is None:
+            return
+        line_edit.setFocus(Qt.FocusReason.OtherFocusReason)
+        line_edit.deselect()
+        line_edit.setCursorPosition(len(current_name))
 
     def delete_item(self, path):
         deleted_index = self.fs_proxy_model.mapFromSource(self.fs_model.index(path))
@@ -2235,6 +2375,12 @@ class MainWindow(QMainWindow):
             if not self._flush_pending_changes():
                 return
             self.open_testlog(path)
+
+    def tree_item_double_clicked(self, index):
+        source_index = self.fs_proxy_model.mapToSource(index)
+        path = self.fs_model.filePath(source_index)
+        if path.endswith(".testlog") and os.path.isfile(path):
+            self.rename_item(path)
 
     def _open_most_recent_testlog(self):
         if not self.workspace_dir:
@@ -2614,6 +2760,7 @@ class MainWindow(QMainWindow):
   a {{
     color: {palette["link"]};
   }}
+  {self._preview_scrollbar_css(theme_mode=theme_mode)}
 </style>
 """
 

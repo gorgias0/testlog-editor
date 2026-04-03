@@ -36,10 +36,7 @@ class WorkspaceFileSystemModel(QFileSystemModel):
         if role == Qt.ItemDataRole.DisplayRole and index.column() == 0:
             path = self.filePath(index)
             if path.endswith(".testlog"):
-                name = Path(path).stem
-                if path in self.pinned_paths:
-                    return f"📌 {name}"
-                return name
+                return Path(path).stem
 
         return super().data(index, role)
 

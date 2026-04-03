@@ -39,9 +39,9 @@ TESTLOG_PINNED_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 
   <path d="M36 0 L36 12 L48 12 Z" fill="#93c5fd"/>
   <circle cx="30" cy="46" r="10" fill="#22c55e"/>
   <polyline points="24,46 28,51 37,40" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="40" cy="8" r="9" fill="#ef4444"/>
-  <line x1="40" y1="3" x2="40" y2="13" stroke="white" stroke-width="2" stroke-linecap="round"/>
-  <line x1="35" y1="8" x2="45" y2="8" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="33" cy="14" r="11" fill="#ef4444"/>
+  <line x1="33" y1="8" x2="33" y2="20" stroke="white" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="27" y1="14" x2="39" y2="14" stroke="white" stroke-width="2.6" stroke-linecap="round"/>
 </svg>'''
 
 
