@@ -8,6 +8,7 @@ import re
 import base64
 import tempfile
 import ctypes
+import threading
 from urllib.parse import quote as url_quote, unquote as url_unquote, urlparse
 from pathlib import Path
 from PySide6.QtWidgets import (
@@ -18,9 +19,10 @@ from PySide6.QtWidgets import (
     QToolBar, QStatusBar, QLabel,
     QMenu, QMessageBox,
     QLineEdit, QStyle, QSizePolicy, QToolButton,
-    QDialog, QDialogButtonBox, QFormLayout, QCheckBox
+    QDialog, QDialogButtonBox, QFormLayout, QCheckBox,
+    QListWidget, QListWidgetItem, QGraphicsDropShadowEffect
 )
-from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, QItemSelectionModel, QSize
+from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, Signal, QItemSelectionModel, QSize, QPoint
 from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument, QTextCharFormat, QSyntaxHighlighter, QDesktopServices
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
@@ -39,8 +41,10 @@ from icons import (
 from diff_window import DiffWindow
 from text_tool_dialog import TextToolDialog
 from testlog_utils import (
+    build_fulltext_search_results,
     collect_referenced_image_filenames,
     guess_markdown_from_plain_text,
+    highlight_fulltext_snippet,
     preferred_markdown_paste_text,
     resolve_preview_image_path,
     suggest_filename_from_heading,
@@ -720,6 +724,323 @@ class PreviewBridge(QObject):
         self._checkbox_toggle_handler(index, checked)
 
 
+def read_testlog_note_text(path):
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            if "note.md" not in zf.namelist():
+                return None
+            with zf.open("note.md") as note_file:
+                return note_file.read().decode("utf-8")
+    except Exception:
+        return None
+
+
+class FullTextIndexSignals(QObject):
+    progress = Signal(int, int, int)
+    complete = Signal(int, dict)
+
+
+class Indexer(threading.Thread):
+    def __init__(self, workspace_dir, on_progress, on_complete):
+        super().__init__(daemon=True)
+        self.workspace_dir = workspace_dir
+        self.on_progress = on_progress
+        self.on_complete = on_complete
+        self.index = {}
+
+    def run(self):
+        files = []
+        for root, _, filenames in os.walk(self.workspace_dir):
+            for name in filenames:
+                if name.endswith(".testlog"):
+                    files.append(os.path.join(root, name))
+
+        for current_index, path in enumerate(files, start=1):
+            note_text = read_testlog_note_text(path)
+            if note_text is not None:
+                self.index[path] = note_text
+            self.on_progress(current_index, len(files))
+
+        self.on_complete(dict(self.index))
+
+
+class FullTextSearchDialog(QDialog):
+    resultActivated = Signal(str, str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._workspace_dir = None
+        self._index = {}
+        self._results = []
+        self._last_query = ""
+        self._theme_colors = {}
+
+        self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.setModal(False)
+        self.setFixedWidth(600)
+
+        self.shadow = QGraphicsDropShadowEffect(self)
+        self.shadow.setBlurRadius(40)
+        self.shadow.setOffset(0, 16)
+        self.setGraphicsEffect(self.shadow)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.search_input = QLineEdit(self)
+        self.search_input.setPlaceholderText("Sök i alla dokument...")
+        layout.addWidget(self.search_input)
+
+        self.status_label = QLabel(self)
+        self.status_label.setStyleSheet("padding: 8px 12px; color: #64748b; font-size: 12px;")
+        self.status_label.hide()
+        layout.addWidget(self.status_label)
+
+        self.results_list = QListWidget(self)
+        self.results_list.setMinimumHeight(0)
+        self.results_list.setMaximumHeight(360)
+        self.results_list.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.results_list.hide()
+        layout.addWidget(self.results_list)
+
+        self.search_timer = QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(200)
+        self.search_timer.timeout.connect(self._refresh_results)
+
+        self.search_input.textChanged.connect(lambda _text: self._schedule_search())
+        self.search_input.installEventFilter(self)
+        self.results_list.installEventFilter(self)
+        self.results_list.itemActivated.connect(self._open_current_item)
+        self.results_list.itemClicked.connect(self._open_current_item)
+
+    def apply_theme(self, palette, theme_mode):
+        if theme_mode == "dark":
+            colors = {
+                "dialog_bg": "#111827",
+                "dialog_border": "#475569",
+                "dialog_text": "#e6edf3",
+                "muted_text": "#9fb0c3",
+                "path_text": "#7f92a8",
+                "input_bg": "#0f172a",
+                "input_border": "#334155",
+                "result_hover": "#1e293b",
+                "result_selected": "#334155",
+                "result_selected_text": "#f8fafc",
+                "status_bg": "#162033",
+                "shadow": QColor(0, 0, 0, 150),
+            }
+        else:
+            colors = {
+                "dialog_bg": "#ffffff",
+                "dialog_border": "#b8c5d6",
+                "dialog_text": "#17202b",
+                "muted_text": "#526070",
+                "path_text": "#7c8da1",
+                "input_bg": "#f8fbff",
+                "input_border": "#d7e0eb",
+                "result_hover": "#eef4fb",
+                "result_selected": "#dbeafe",
+                "result_selected_text": "#0f172a",
+                "status_bg": "#f3f7fb",
+                "shadow": QColor(15, 23, 42, 85),
+            }
+
+        self._theme_colors = colors
+        self.shadow.setColor(colors["shadow"])
+        self.setStyleSheet(
+            f"""
+            QDialog {{
+                background: {colors["dialog_bg"]};
+                color: {colors["dialog_text"]};
+                border: 2px solid {colors["dialog_border"]};
+                border-radius: 12px;
+            }}
+            QLineEdit {{
+                background: {colors["input_bg"]};
+                color: {colors["dialog_text"]};
+                font-size: 16px;
+                padding: 12px 14px;
+                border: none;
+                border-bottom: 1px solid {colors["input_border"]};
+            }}
+            QLineEdit::placeholder {{
+                color: {colors["muted_text"]};
+            }}
+            QListWidget {{
+                background: {colors["dialog_bg"]};
+                border: 1px solid {colors["input_border"]};
+                border-top: none;
+                font-size: 13px;
+                outline: none;
+            }}
+            QListWidget::item {{
+                padding: 8px 12px;
+                border-bottom: 1px solid {colors["input_border"]};
+            }}
+            QListWidget::item:hover {{
+                background: {colors["result_hover"]};
+            }}
+            QListWidget::item:selected {{
+                background: {colors["result_selected"]};
+                color: {colors["result_selected_text"]};
+            }}
+            """
+        )
+        self.status_label.setStyleSheet(
+            f"padding: 8px 12px; color: {colors['muted_text']}; "
+            f"background: {colors['status_bg']}; font-size: 12px;"
+        )
+
+    def open_for_workspace(self, workspace_dir, index, indexing_active=False, progress=None):
+        self._workspace_dir = workspace_dir
+        self._index = dict(index or {})
+        self._set_indexing_status(indexing_active, progress or (0, 0))
+        self.search_input.clear()
+        self.results_list.clear()
+        self.results_list.hide()
+        self.results_list.setFixedHeight(0)
+        self.adjustSize()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.search_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def update_index(self, index):
+        self._index = dict(index or {})
+        if self.isVisible() and self.search_input.text().strip():
+            self._schedule_search()
+
+    def update_progress(self, current, total):
+        self._set_indexing_status(True, (current, total))
+
+    def mark_index_complete(self):
+        self._set_indexing_status(False, (0, 0))
+        if self.isVisible() and self.search_input.text().strip():
+            self._schedule_search()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        center = parent.rect().center()
+        x_pos = center.x() - self.width() // 2
+        y_pos = center.y() - 220
+        self.move(parent.mapToGlobal(QPoint(max(24, x_pos), max(80, y_pos))))
+
+    def eventFilter(self, obj, event):
+        if event.type() == event.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self.close()
+                return True
+            if obj is self.search_input:
+                if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    self._activate_selected_result()
+                    return True
+                if event.key() == Qt.Key.Key_Down and self.results_list.isVisible() and self.results_list.count():
+                    self.results_list.setFocus(Qt.FocusReason.ShortcutFocusReason)
+                    self.results_list.setCurrentRow(max(0, self.results_list.currentRow()))
+                    return True
+            if obj is self.results_list and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._activate_selected_result()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _schedule_search(self):
+        self.search_timer.start()
+
+    def _set_indexing_status(self, indexing_active, progress):
+        if indexing_active:
+            current, total = progress
+            self.status_label.setText(f"Indexerar... ({current}/{total})")
+            self.status_label.show()
+            return
+        self.status_label.hide()
+
+    def _refresh_results(self):
+        query = self.search_input.text().strip()
+        self._last_query = query
+        self.results_list.clear()
+        self._results = []
+
+        if not query:
+            self.results_list.hide()
+            self.results_list.setFixedHeight(0)
+            self.adjustSize()
+            return
+
+        self._results = build_fulltext_search_results(query, self._index)
+        for result in self._results:
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, result)
+            item.setSizeHint(QSize(560, 74))
+            self.results_list.addItem(item)
+            self.results_list.setItemWidget(item, self._build_result_widget(result, query))
+
+        self.results_list.setVisible(bool(self._results))
+        if self._results:
+            frame_height = self.results_list.frameWidth() * 2
+            content_height = self.results_list.sizeHintForRow(0) * self.results_list.count()
+            if content_height <= 0:
+                content_height = 74 * self.results_list.count()
+            visible_height = min(360, frame_height + content_height)
+            self.results_list.setFixedHeight(visible_height)
+            self.results_list.setCurrentRow(0)
+        else:
+            self.results_list.setFixedHeight(0)
+        self.adjustSize()
+
+    def _build_result_widget(self, result, query):
+        container = QWidget(self.results_list)
+        container.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        display_name = Path(result["path"]).stem
+        filename_label = QLabel(f"<b>{display_name}</b>", container)
+        filename_label.setStyleSheet(
+            f"background: transparent; color: {self._theme_colors.get('dialog_text', '#111827')};"
+        )
+        layout.addWidget(filename_label)
+
+        snippet_label = QLabel(highlight_fulltext_snippet(result["snippet"], query), container)
+        snippet_label.setTextFormat(Qt.TextFormat.RichText)
+        snippet_label.setWordWrap(True)
+        snippet_label.setStyleSheet(
+            f"background: transparent; color: {self._theme_colors.get('muted_text', '#475569')};"
+        )
+        layout.addWidget(snippet_label)
+
+        if self._workspace_dir:
+            relative_path = os.path.relpath(result["path"], self._workspace_dir)
+            relative_parent = os.path.dirname(relative_path)
+            if relative_parent and relative_parent != ".":
+                path_label = QLabel(relative_parent, container)
+                path_label.setStyleSheet(
+                    f"background: transparent; color: {self._theme_colors.get('path_text', '#94a3b8')}; font-size: 11px;"
+                )
+                layout.addWidget(path_label)
+
+        return container
+
+    def _open_current_item(self, item):
+        result = item.data(Qt.ItemDataRole.UserRole)
+        if not result:
+            return
+        self.close()
+        self.resultActivated.emit(result["path"], self._last_query)
+
+    def _activate_selected_result(self):
+        if not self.results_list.isVisible() or not self.results_list.count():
+            return
+        current_item = self.results_list.currentItem() or self.results_list.item(0)
+        if current_item is not None:
+            self._open_current_item(current_item)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -743,6 +1064,15 @@ class MainWindow(QMainWindow):
         self._preview_base_url = QUrl()
         self._pending_preview_body_html = ""
         self._preview_shell_key = None
+        self.fulltext_index = {}
+        self.fulltext_indexing = False
+        self.fulltext_index_progress = (0, 0)
+        self.fulltext_index_generation = 0
+        self.fulltext_index_overrides = {}
+        self.fulltext_search_dialog = None
+        self.fulltext_index_signals = FullTextIndexSignals(self)
+        self.fulltext_index_signals.progress.connect(self._on_fulltext_index_progress)
+        self.fulltext_index_signals.complete.connect(self._on_fulltext_index_complete)
         self.md_parser = MarkdownIt("commonmark", {"html": False}).enable("table")
         if tasklists_plugin is not None:
             self.md_parser.use(tasklists_plugin)
@@ -1114,16 +1444,7 @@ class MainWindow(QMainWindow):
             """
         )
         if hasattr(self, "editor"):
-            self.editor.setStyleSheet(
-                f"""
-                QTextEdit {{
-                    background: {palette['panel_bg']};
-                    color: {palette['text']};
-                    border: 1px solid {palette['panel_border']};
-                }}
-                {self._editor_scrollbar_stylesheet()}
-                """
-            )
+            self._apply_editor_stylesheet()
         if self.diff_window is not None:
             self.diff_window.apply_theme(palette)
         if hasattr(self, "preview"):
@@ -1137,6 +1458,32 @@ class MainWindow(QMainWindow):
             self.toolbar.setStyleSheet(self._toolbar_stylesheet())
         if hasattr(self, "editor_highlighter"):
             self.editor_highlighter.set_theme_mode(self.theme_mode)
+        if self.fulltext_search_dialog is not None:
+            self.fulltext_search_dialog.apply_theme(palette, self.theme_mode)
+
+    def _editor_selection_background_color(self):
+        palette = self._theme_palette()
+        if self.find_bar.isVisible() and self.find_matches and self.current_find_index >= 0:
+            return "#A57538" if self.theme_mode == "dark" else "#f59e0b"
+        return palette["chrome_hover"]
+
+    def _apply_editor_stylesheet(self):
+        if not hasattr(self, "editor"):
+            return
+        palette = self._theme_palette()
+        selection_bg = self._editor_selection_background_color()
+        self.editor.setStyleSheet(
+            f"""
+            QTextEdit {{
+                background: {palette['panel_bg']};
+                color: {palette['text']};
+                border: 1px solid {palette['panel_border']};
+                selection-background-color: {selection_bg};
+                selection-color: {palette['text']};
+            }}
+            {self._editor_scrollbar_stylesheet()}
+            """
+        )
 
     def _set_workspace(self, path):
         if path != self.workspace_dir and not self._flush_pending_changes():
@@ -1150,6 +1497,7 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(self._window_title(os.path.basename(path)))
             self.statusBar().showMessage(self._tr("Workspace opened: {path}").format(path=path), 3000)
             self.settings.setValue("last_workspace", path)
+            self._start_fulltext_indexing()
             self._open_most_recent_testlog()
 
     def _setup_menu(self):
@@ -1461,6 +1809,8 @@ class MainWindow(QMainWindow):
 
         self.preview_shortcut = QShortcut(QKeySequence("Ctrl+Shift+P"), self)
         self.preview_shortcut.activated.connect(lambda: self.toggle_preview_btn.click())
+        self.search_shortcut = QShortcut(QKeySequence("Ctrl+Shift+F"), self)
+        self.search_shortcut.activated.connect(self.open_fulltext_search)
 
     def _retranslate_ui(self):
         self.file_menu.setTitle(self._with_mnemonic(self._tr("File")))
@@ -1779,6 +2129,14 @@ class MainWindow(QMainWindow):
         self.find_next_action.triggered.connect(lambda checked=False: self._find_next())
         self.addAction(self.find_next_action)
 
+        self.find_page_down_shortcut = QShortcut(QKeySequence(Qt.Key.Key_PageDown), self.editor_panel)
+        self.find_page_down_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.find_page_down_shortcut.activated.connect(self._find_next_via_page_key)
+
+        self.find_page_up_shortcut = QShortcut(QKeySequence(Qt.Key.Key_PageUp), self.editor_panel)
+        self.find_page_up_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.find_page_up_shortcut.activated.connect(self._find_previous_via_page_key)
+
         self.find_close_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self.editor_panel)
         self.find_close_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.find_close_shortcut.activated.connect(lambda: self.close_find_bar())
@@ -1939,7 +2297,136 @@ class MainWindow(QMainWindow):
         self.find_search_timer.stop()
         self.find_counter_label.setText("")
         self.editor.setExtraSelections([])
+        self._apply_editor_stylesheet()
         self.editor.setFocus()
+
+    def open_fulltext_search(self):
+        if not self.workspace_dir or not os.path.isdir(self.workspace_dir):
+            self.statusBar().showMessage(self._tr("Select workspace first"), 3000)
+            return
+
+        if self.fulltext_search_dialog is None:
+            self.fulltext_search_dialog = FullTextSearchDialog(self)
+            self.fulltext_search_dialog.apply_theme(self._theme_palette(), self.theme_mode)
+            self.fulltext_search_dialog.resultActivated.connect(self._open_fulltext_search_result)
+
+        self.fulltext_search_dialog.open_for_workspace(
+            self.workspace_dir,
+            self.fulltext_index,
+            indexing_active=self.fulltext_indexing,
+            progress=self.fulltext_index_progress,
+        )
+
+    def _open_find_bar_with_term(self, term):
+        self.find_bar.setVisible(True)
+        self.find_input.setFocus()
+        self.find_input.setText(term)
+        self.find_input.selectAll()
+        self._schedule_find_results(term)
+        QTimer.singleShot(0, self.editor.setFocus)
+
+    def _start_fulltext_indexing(self):
+        if not self.workspace_dir or not os.path.isdir(self.workspace_dir):
+            self.fulltext_index = {}
+            self.fulltext_indexing = False
+            self.fulltext_index_progress = (0, 0)
+            return
+
+        self.fulltext_index_generation += 1
+        generation = self.fulltext_index_generation
+        self.fulltext_indexing = True
+        self.fulltext_index_progress = (0, 0)
+        self.fulltext_index_overrides = {}
+
+        indexer = Indexer(
+            self.workspace_dir,
+            on_progress=lambda current, total: self.fulltext_index_signals.progress.emit(generation, current, total),
+            on_complete=lambda index: self.fulltext_index_signals.complete.emit(generation, index),
+        )
+        indexer.start()
+
+        if self.fulltext_search_dialog is not None:
+            self.fulltext_search_dialog.update_progress(*self.fulltext_index_progress)
+
+    @Slot(int, int, int)
+    def _on_fulltext_index_progress(self, generation, current, total):
+        if generation != self.fulltext_index_generation:
+            return
+        self.fulltext_index_progress = (current, total)
+        if self.fulltext_search_dialog is not None:
+            self.fulltext_search_dialog.update_progress(current, total)
+
+    @Slot(int, dict)
+    def _on_fulltext_index_complete(self, generation, index):
+        if generation != self.fulltext_index_generation:
+            return
+
+        merged_index = dict(index)
+        for path, note_text in self.fulltext_index_overrides.items():
+            if note_text is None:
+                merged_index.pop(path, None)
+            else:
+                merged_index[path] = note_text
+
+        self.fulltext_index = merged_index
+        self.fulltext_indexing = False
+        self.fulltext_index_progress = (self.fulltext_index_progress[1], self.fulltext_index_progress[1])
+        if self.fulltext_search_dialog is not None:
+            self.fulltext_search_dialog.update_index(self.fulltext_index)
+            self.fulltext_search_dialog.mark_index_complete()
+
+    def _record_fulltext_index_override(self, path, note_text):
+        if self.fulltext_indexing:
+            self.fulltext_index_overrides[path] = note_text
+
+    def _update_fulltext_index_for_file(self, path):
+        if not path or not path.endswith(".testlog"):
+            return
+        if not self.workspace_dir:
+            return
+
+        workspace_abs = os.path.abspath(self.workspace_dir)
+        try:
+            common_path = os.path.commonpath([os.path.abspath(path), workspace_abs])
+        except ValueError:
+            return
+        if common_path != workspace_abs:
+            return
+
+        note_text = read_testlog_note_text(path)
+        if note_text is None:
+            self.fulltext_index.pop(path, None)
+        else:
+            self.fulltext_index[path] = note_text
+        self._record_fulltext_index_override(path, note_text)
+
+        if self.fulltext_search_dialog is not None:
+            self.fulltext_search_dialog.update_index(self.fulltext_index)
+
+    def _remove_fulltext_index_entries_for_path(self, path):
+        normalized_path = os.path.abspath(path)
+        remaining_index = {}
+        for indexed_path, text in self.fulltext_index.items():
+            indexed_abs = os.path.abspath(indexed_path)
+            if indexed_abs == normalized_path or indexed_abs.startswith(normalized_path + os.sep):
+                self._record_fulltext_index_override(indexed_path, None)
+                continue
+            remaining_index[indexed_path] = text
+        self.fulltext_index = remaining_index
+
+        if self.fulltext_search_dialog is not None:
+            self.fulltext_search_dialog.update_index(self.fulltext_index)
+
+    def _open_fulltext_search_result(self, path, query):
+        if self.current_file and os.path.abspath(path) == os.path.abspath(self.current_file):
+            self._open_find_bar_with_term(query)
+            return
+
+        if not self._flush_pending_changes():
+            return
+
+        self.open_testlog(path)
+        self._open_find_bar_with_term(query)
 
     def _schedule_find_results(self, term):
         self.pending_find_term = term
@@ -1959,6 +2446,7 @@ class MainWindow(QMainWindow):
             self.current_find_index = -1
             self.find_counter_label.setText(self._tr("No Matches") if term else "")
             self.editor.setExtraSelections([])
+            self._apply_editor_stylesheet()
             self.find_search_running = False
             if generation != self.find_search_generation:
                 self.find_search_timer.start()
@@ -1997,10 +2485,11 @@ class MainWindow(QMainWindow):
         for index, match in enumerate(self.find_matches):
             selection = QTextEdit.ExtraSelection()
             selection.cursor = QTextCursor(match)
-            color = QColor("#f59e0b") if index == self.current_find_index else QColor("#fde047")
+            color = QColor("#A57538") if index == self.current_find_index else QColor("#3080AA")
             selection.format.setBackground(color)
             selections.append(selection)
         self.editor.setExtraSelections(selections)
+        self._apply_editor_stylesheet()
         if self.find_matches:
             self.find_counter_label.setText(f"{self.current_find_index + 1} / {len(self.find_matches)}")
 
@@ -2023,6 +2512,14 @@ class MainWindow(QMainWindow):
     def _find_previous(self):
         if self.find_matches:
             self._focus_find_match(self.current_find_index - 1)
+
+    def _find_next_via_page_key(self):
+        if self.find_bar.isVisible() and len(self.find_matches) > 1:
+            self._find_next()
+
+    def _find_previous_via_page_key(self):
+        if self.find_bar.isVisible() and len(self.find_matches) > 1:
+            self._find_previous()
 
     def _sync_find_current_match_from_cursor(self):
         if not self.find_bar.isVisible() or not self.find_matches:
@@ -2399,6 +2896,7 @@ class MainWindow(QMainWindow):
             self.current_file = new_path
             self.setWindowTitle(self._window_title(os.path.basename(new_path)))
         self._select_file_in_tree(new_path)
+        self._start_fulltext_indexing()
 
     def _position_rename_dialog_cursor(self, dialog, current_name):
         line_edit = dialog.findChild(QLineEdit)
@@ -2430,6 +2928,7 @@ class MainWindow(QMainWindow):
             os.remove(path)
 
         self._remove_tracked_paths(path)
+        self._remove_fulltext_index_entries_for_path(path)
         self.refresh_pinned()
         if self.current_file is None:
             if replacement_path and os.path.isfile(replacement_path):
@@ -2438,6 +2937,7 @@ class MainWindow(QMainWindow):
                 self.editor.clear()
                 self.tree.clearSelection()
                 self.setWindowTitle(self._window_title())
+        self._start_fulltext_indexing()
 
     def _replacement_file_path_after_delete(self, deleted_index, deleted_path):
         if not deleted_index.isValid():
@@ -2470,6 +2970,7 @@ class MainWindow(QMainWindow):
         self._update_tracked_paths(path, new_path)
         self.refresh_pinned()
         self._select_file_in_tree(new_path)
+        self._start_fulltext_indexing()
 
     def toggle_pin(self, path):
         if path in self.pinned_files:
@@ -2770,6 +3271,7 @@ class MainWindow(QMainWindow):
 
     def open_testlog(self, path):
         self.autosave_timer.stop()
+        self.close_find_bar()
         shutil.rmtree(self.session_dir, ignore_errors=True)
         self._new_session()
 
@@ -2827,8 +3329,14 @@ class MainWindow(QMainWindow):
             return False
         if not path.endswith(".testlog"):
             path += ".testlog"
-        self.current_file = path
+        previous_path = self.current_file
         self._write_testlog(path)
+        self.current_file = path
+        if previous_path and os.path.abspath(previous_path) != os.path.abspath(path):
+            if os.path.exists(previous_path):
+                self._update_fulltext_index_for_file(previous_path)
+            else:
+                self._remove_fulltext_index_entries_for_path(previous_path)
         self.setWindowTitle(self._window_title(os.path.basename(path)))
         return True
 
@@ -2850,6 +3358,7 @@ class MainWindow(QMainWindow):
                         zf.write(img_path, f"images/{img}")
         self.editor.document().setModified(False)
         self.autosave_timer.stop()
+        self._update_fulltext_index_for_file(path)
         return True
 
     def _suggest_filename_from_heading(self):

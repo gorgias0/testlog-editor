@@ -1,5 +1,6 @@
 import os
 import re
+from html import escape
 from urllib.parse import unquote, urlsplit
 from urllib.request import url2pathname
 
@@ -143,3 +144,50 @@ def resolve_preview_image_path(src, session_dir):
         return decoded_src
 
     return os.path.normpath(os.path.join(session_dir, decoded_src))
+
+
+def build_fulltext_search_results(query, index, limit=50, snippet_radius=50):
+    normalized_query = (query or "").strip()
+    if not normalized_query:
+        return []
+
+    query_lower = normalized_query.lower()
+    results = []
+    for path, text in index.items():
+        haystack = text or ""
+        match_pos = haystack.lower().find(query_lower)
+        if match_pos == -1:
+            continue
+
+        snippet_start = max(0, match_pos - snippet_radius)
+        snippet_end = min(len(haystack), match_pos + len(normalized_query) + snippet_radius)
+        snippet = haystack[snippet_start:snippet_end].replace("\n", " ").strip()
+        if snippet_start > 0:
+            snippet = "..." + snippet
+        if snippet_end < len(haystack):
+            snippet = snippet + "..."
+
+        results.append({
+            "path": path,
+            "snippet": snippet,
+            "position": match_pos,
+        })
+
+    results.sort(key=lambda item: (os.path.basename(item["path"]).lower(), item["path"].lower()))
+    return results[:limit]
+
+
+def highlight_fulltext_snippet(snippet, query, highlight_color="#2563eb"):
+    escaped_snippet = escape(snippet or "")
+    normalized_query = (query or "").strip()
+    if not normalized_query:
+        return escaped_snippet
+
+    pattern = re.compile(re.escape(normalized_query), re.IGNORECASE)
+    return pattern.sub(
+        lambda match: (
+            f'<span style="color: {highlight_color}; font-weight: 600;">'
+            f"{escape(match.group(0))}</span>"
+        ),
+        escaped_snippet,
+    )
