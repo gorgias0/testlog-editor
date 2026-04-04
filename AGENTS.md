@@ -101,4 +101,5 @@ There is now a small unit test suite for extracted helper logic, but UI behavior
 - Check the current git diff before editing; this repo may have local work in progress.
 - Avoid deleting user files in the chosen workspace during testing.
 - If you add dependencies or commands, update both this file and `README.md`.
+- If you add dependencies make sure to update requirements.txt and testlog.spec if needed.
 - Windows packaging should use the committed `testlog.spec` one-directory build, and packaged output remains ignored via `build/` and `dist/`.
