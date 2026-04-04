@@ -17,10 +17,11 @@ from PySide6.QtWidgets import (
     QPushButton, QHBoxLayout, QInputDialog,
     QToolBar, QStatusBar, QLabel,
     QMenu, QMessageBox,
-    QLineEdit, QStyle, QSizePolicy, QToolButton
+    QLineEdit, QStyle, QSizePolicy, QToolButton,
+    QDialog, QDialogButtonBox, QFormLayout, QCheckBox
 )
-from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QObject, Slot, QItemSelectionModel, QSize
-from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument, QTextCharFormat, QSyntaxHighlighter
+from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, QItemSelectionModel, QSize
+from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument, QTextCharFormat, QSyntaxHighlighter, QDesktopServices
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebChannel import QWebChannel
@@ -39,6 +40,8 @@ from diff_window import DiffWindow
 from text_tool_dialog import TextToolDialog
 from testlog_utils import (
     collect_referenced_image_filenames,
+    guess_markdown_from_plain_text,
+    preferred_markdown_paste_text,
     resolve_preview_image_path,
     suggest_filename_from_heading,
 )
@@ -106,7 +109,11 @@ class Editor(QTextEdit):
             image = QImage(source.imageData())
             self.on_image_paste(image)
         elif source.hasText():
-            self.insertPlainText(source.text())
+            mime_data = {
+                mime_type: bytes(source.data(mime_type))
+                for mime_type in source.formats()
+            }
+            self.insertPlainText(preferred_markdown_paste_text(mime_data, source.text()))
         else:
             super().insertFromMimeData(source)
 
@@ -390,6 +397,22 @@ class Editor(QTextEdit):
     def insert_current_date(self):
         cursor = self.textCursor()
         cursor.insertText(QDate.currentDate().toString("yyyy-MM-dd"))
+
+    def insert_current_time(self):
+        cursor = self.textCursor()
+        cursor.insertText(QTime.currentTime().toString("HH:mm:ss"))
+        self.setTextCursor(cursor)
+
+    def insert_current_date_time(self):
+        cursor = self.textCursor()
+        cursor.insertText(
+            f"{QDate.currentDate().toString('yyyy-MM-dd')} {QTime.currentTime().toString('HH:mm:ss')}"
+        )
+        self.setTextCursor(cursor)
+
+    def insert_markdown_text(self, text):
+        cursor = self.textCursor()
+        cursor.insertText(text)
         self.setTextCursor(cursor)
 
     def copy_line(self):
@@ -677,6 +700,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
 class PreviewPage(QWebEnginePage):
     def acceptNavigationRequest(self, url, nav_type, is_main_frame):
         if url.scheme().lower() not in {"", "about", "data", "file"}:
+            QDesktopServices.openUrl(url)
             return False
         return super().acceptNavigationRequest(url, nav_type, is_main_frame)
 
@@ -937,7 +961,7 @@ class MainWindow(QMainWindow):
             return value
         if attribute_name == "src" and value.lower().startswith("data:image/"):
             return value
-        if attribute_name == "href" and scheme == "mailto":
+        if attribute_name == "href" and scheme in {"http", "https", "ftp", "mailto"}:
             return value
         return ""
 
@@ -1134,6 +1158,7 @@ class MainWindow(QMainWindow):
         self.edit_menu = menubar.addMenu("")
         self.transform_menu = menubar.addMenu("")
         self.format_menu = menubar.addMenu("")
+        self.insert_menu = menubar.addMenu("")
         self.view_menu = menubar.addMenu("")
         self.tools_menu = menubar.addMenu("")
         self.language_menu = menubar.addMenu("")
@@ -1203,6 +1228,14 @@ class MainWindow(QMainWindow):
         self.date_menu_action = QAction(self)
         self.date_menu_action.setShortcut("Ctrl+Alt+D")
         self.date_menu_action.triggered.connect(self.editor.insert_current_date)
+        self.time_menu_action = QAction(self)
+        self.time_menu_action.triggered.connect(self.editor.insert_current_time)
+        self.date_time_menu_action = QAction(self)
+        self.date_time_menu_action.triggered.connect(self.editor.insert_current_date_time)
+        self.link_menu_action = QAction(self)
+        self.link_menu_action.triggered.connect(self.insert_link)
+        self.image_menu_action = QAction(self)
+        self.image_menu_action.triggered.connect(self.insert_image)
         self.base64_encode_menu_action = QAction(self)
         self.base64_encode_menu_action.triggered.connect(self._transform_editor_base64_encode)
         self.base64_decode_menu_action = QAction(self)
@@ -1213,6 +1246,10 @@ class MainWindow(QMainWindow):
         self.url_decode_menu_action.triggered.connect(self._transform_editor_url_decode)
         self.format_json_menu_action = QAction(self)
         self.format_json_menu_action.triggered.connect(self._transform_editor_format_json)
+        self.guess_markdown_menu_action = QAction(self)
+        self.guess_markdown_menu_action.triggered.connect(self._transform_editor_guess_markdown)
+        self.text_tool_action = QAction(self)
+        self.text_tool_action.triggered.connect(self.open_text_tool)
         self.diff_action = QAction(self)
         self.diff_action.triggered.connect(self.open_diff_window)
         self.send_to_diff_a_action = QAction(self)
@@ -1286,6 +1323,7 @@ class MainWindow(QMainWindow):
         self.transform_menu.addAction(self.url_decode_menu_action)
         self.transform_menu.addSeparator()
         self.transform_menu.addAction(self.format_json_menu_action)
+        self.transform_menu.addAction(self.guess_markdown_menu_action)
 
         self.format_menu.addAction(self.bold_menu_action)
         self.format_menu.addAction(self.italic_menu_action)
@@ -1302,14 +1340,19 @@ class MainWindow(QMainWindow):
         self.format_menu.addAction(self.numbered_list_action)
         self.format_menu.addAction(self.blockquote_action)
         self.format_menu.addAction(self.horizontal_rule_action)
-        self.format_menu.addSeparator()
-        self.format_menu.addAction(self.date_menu_action)
+        self.insert_menu.addAction(self.date_menu_action)
+        self.insert_menu.addAction(self.time_menu_action)
+        self.insert_menu.addAction(self.date_time_menu_action)
+        self.insert_menu.addSeparator()
+        self.insert_menu.addAction(self.link_menu_action)
+        self.insert_menu.addAction(self.image_menu_action)
 
         self.view_menu.addMenu(self.font_size_menu)
         self.view_menu.addSeparator()
         self.view_menu.addAction(self.light_mode_action)
         self.view_menu.addAction(self.dark_mode_action)
 
+        self.tools_menu.addAction(self.text_tool_action)
         self.tools_menu.addAction(self.diff_action)
         self.tools_menu.addAction(self.send_to_diff_a_action)
         self.tools_menu.addAction(self.send_to_diff_b_action)
@@ -1394,12 +1437,6 @@ class MainWindow(QMainWindow):
 
         self.toolbar.addSeparator()
 
-        self.toolbar_date_action = QAction(self)
-        self.toolbar_date_action.triggered.connect(self.editor.insert_current_date)
-        self.toolbar.addAction(self.toolbar_date_action)
-
-        self.toolbar.addSeparator()
-
         self.toolbar_text_tool_action = QAction(self)
         self.toolbar_text_tool_action.triggered.connect(self.open_text_tool)
         self.toolbar.addAction(self.toolbar_text_tool_action)
@@ -1430,6 +1467,7 @@ class MainWindow(QMainWindow):
         self.edit_menu.setTitle(self._with_mnemonic(self._tr("Edit")))
         self.transform_menu.setTitle(self._with_mnemonic(self._tr("Transform")))
         self.format_menu.setTitle(self._with_mnemonic(self._tr("Format")))
+        self.insert_menu.setTitle(self._with_mnemonic(self._tr("Insert")))
         self.view_menu.setTitle(self._with_mnemonic(self._tr("View")))
         self.tools_menu.setTitle(self._with_mnemonic(self._tr("Tools")))
         self.language_menu.setTitle(self._with_mnemonic(self._tr("Language")))
@@ -1454,6 +1492,8 @@ class MainWindow(QMainWindow):
         self.url_encode_menu_action.setText(self._tr("To URL"))
         self.url_decode_menu_action.setText(self._tr("From URL"))
         self.format_json_menu_action.setText(self._tr("Format JSON"))
+        self.guess_markdown_menu_action.setText(self._tr("Guess Markdown From Plain Text"))
+        self.text_tool_action.setText(self._tr("Text Tool"))
         self.diff_action.setText(self._tr("Diff..."))
         self.send_to_diff_a_action.setText(self._tr("Send Current Text to Diff A"))
         self.send_to_diff_b_action.setText(self._tr("Send Current Text to Diff B"))
@@ -1472,6 +1512,10 @@ class MainWindow(QMainWindow):
         self.blockquote_action.setText(self._tr("Blockquote"))
         self.horizontal_rule_action.setText(self._tr("Horizontal Rule"))
         self.date_menu_action.setText(self._tr("Insert Date"))
+        self.time_menu_action.setText(self._tr("Insert Time"))
+        self.date_time_menu_action.setText(self._tr("Insert Date & Time"))
+        self.link_menu_action.setText(self._tr("Insert Link..."))
+        self.image_menu_action.setText(self._tr("Insert Image..."))
         self.font_size_menu.setTitle(self._tr("Font Size"))
         self.light_mode_action.setText(self._tr("Light Mode"))
         self.dark_mode_action.setText(self._tr("Dark Mode"))
@@ -1512,8 +1556,6 @@ class MainWindow(QMainWindow):
         self.toolbar_quote_action.setToolTip(self._tr("Blockquote"))
         self.toolbar_hr_action.setText("─")
         self.toolbar_hr_action.setToolTip(self._tr("Horizontal Rule"))
-        self.toolbar_date_action.setText(self._tr("Date"))
-        self.toolbar_date_action.setToolTip(self._tr("Insert date (Ctrl+Alt+D)"))
         self.toolbar_text_tool_action.setText(self._tr("Text Tool"))
         self.toolbar_text_tool_action.setToolTip(self._tr("Text Tool"))
         self.toolbar_diff_action.setText(self._tr("Diff"))
@@ -1552,7 +1594,7 @@ class MainWindow(QMainWindow):
         # --- Sidebar ---
         sidebar = QWidget()
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(4, 4, 4, 4)
+        sidebar_layout.setContentsMargins(4, 4, 4, 0)
         sidebar_layout.setSpacing(4)
 
         self.sidebar_search = QLineEdit()
@@ -1618,6 +1660,7 @@ class MainWindow(QMainWindow):
         self.preview = QWebEngineView()
         self.preview.setPage(PreviewPage(self.preview))
         self._configure_web_view_security(self.preview, allow_javascript=True)
+        self.preview.page().linkHovered.connect(self._show_preview_link_hover)
         self.preview_channel = QWebChannel(self.preview.page())
         self.preview_bridge = PreviewBridge(
             self._copy_preview_text,
@@ -1764,7 +1807,6 @@ class MainWindow(QMainWindow):
             self.toolbar.widgetForAction(self.toolbar_numbered_action),
             self.toolbar.widgetForAction(self.toolbar_quote_action),
             self.toolbar.widgetForAction(self.toolbar_hr_action),
-            self.toolbar.widgetForAction(self.toolbar_date_action),
             self.toolbar.widgetForAction(self.toolbar_text_tool_action),
             self.toolbar.widgetForAction(self.toolbar_diff_action),
         ]
@@ -2045,6 +2087,11 @@ class MainWindow(QMainWindow):
             replace_selection,
         )
 
+    def _transform_editor_guess_markdown(self):
+        text, replace_selection = self._editor_selected_or_all_text()
+        guessed = guess_markdown_from_plain_text(text)
+        self._replace_editor_selected_or_all_text(guessed, replace_selection)
+
     def _insert_line_prefix(self, prefix):
         cursor = self.editor.textCursor()
         cursor.beginEditBlock()
@@ -2089,6 +2136,157 @@ class MainWindow(QMainWindow):
         cursor.insertText("\n---\n")
         self.editor.setTextCursor(cursor)
         self.editor.setFocus()
+
+    def insert_link(self):
+        selected_text = self.editor.textCursor().selectedText().replace("\u2029", "\n")
+        initial_text = selected_text
+        initial_url = ""
+        if self._looks_like_url(selected_text):
+            initial_text = ""
+            initial_url = selected_text.strip()
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self._tr("Insert Link..."))
+        dialog.resize(460, dialog.sizeHint().height())
+        layout = QVBoxLayout(dialog)
+        form_layout = QFormLayout()
+
+        text_input = QLineEdit(dialog)
+        text_input.setText(initial_text)
+        url_input = QLineEdit(dialog)
+        url_input.setText(initial_url)
+
+        form_layout.addRow(self._tr("Text:"), text_input)
+        form_layout.addRow(self._tr("URL:"), url_input)
+        layout.addLayout(form_layout)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        url = url_input.text().strip()
+        text = text_input.text().strip()
+        if not url:
+            return
+        if not text:
+            text = url
+
+        self.editor.insert_markdown_text(f"[{text}]({url})")
+        self.editor.setFocus()
+
+    def insert_image(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self._tr("Insert Image..."))
+        dialog.resize(520, dialog.sizeHint().height())
+        layout = QVBoxLayout(dialog)
+        form_layout = QFormLayout()
+
+        alt_input = QLineEdit(dialog)
+        selected_text = self.editor.textCursor().selectedText().replace("\u2029", "\n").strip()
+        if selected_text and not self._looks_like_url(selected_text):
+            alt_input.setText(selected_text)
+
+        source_input = QLineEdit(dialog)
+        browse_button = QPushButton(self._tr("Browse..."), dialog)
+        copy_checkbox = QCheckBox(self._tr("Copy image into note"), dialog)
+        copy_checkbox.setChecked(True)
+
+        source_row = QHBoxLayout()
+        source_row.setContentsMargins(0, 0, 0, 0)
+        source_row.addWidget(source_input, 1)
+        source_row.addWidget(browse_button)
+
+        form_layout.addRow(self._tr("Alt text:"), alt_input)
+        form_layout.addRow(self._tr("Path or URL:"), source_row)
+        form_layout.addRow("", copy_checkbox)
+        layout.addLayout(form_layout)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        def choose_image_file():
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                self._tr("Select image"),
+                "",
+                self._tr("Image Files (*.png *.jpg *.jpeg *.gif *.bmp *.webp *.svg)"),
+            )
+            if not path:
+                return
+            source_input.setText(path)
+            if not alt_input.text().strip():
+                alt_input.setText(Path(path).stem.replace("-", " ").replace("_", " "))
+            copy_checkbox.setChecked(True)
+
+        browse_button.clicked.connect(choose_image_file)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        source_value = source_input.text().strip()
+        if not source_value:
+            return
+
+        alt_text = alt_input.text().strip()
+        markdown_source = source_value
+        if self._should_copy_inserted_image(source_value, copy_checkbox.isChecked()):
+            markdown_source = self._copy_image_into_note(source_value)
+            if markdown_source is None:
+                return
+
+        self.editor.insert_markdown_text(f"![{alt_text}]({markdown_source})")
+        self.editor.setFocus()
+
+    def _looks_like_url(self, text):
+        candidate = text.strip()
+        return bool(candidate) and re.match(r"^(https?|ftp|file)://\S+$", candidate) is not None
+
+    def _should_copy_inserted_image(self, source_value, copy_requested):
+        if not copy_requested:
+            return False
+        if self._looks_like_url(source_value):
+            return False
+        return os.path.exists(source_value)
+
+    def _copy_image_into_note(self, source_path):
+        source_abs = os.path.abspath(source_path)
+        images_abs = os.path.abspath(self.images_dir)
+        if source_abs.startswith(images_abs + os.sep):
+            return f"images/{url_quote(os.path.basename(source_abs))}"
+
+        base_name = os.path.basename(source_abs)
+        candidate_name = base_name
+        stem = Path(base_name).stem
+        suffix = Path(base_name).suffix
+        counter = 2
+        destination = os.path.join(self.images_dir, candidate_name)
+        while os.path.exists(destination):
+            candidate_name = f"{stem}-{counter}{suffix}"
+            destination = os.path.join(self.images_dir, candidate_name)
+            counter += 1
+
+        try:
+            shutil.copy2(source_abs, destination)
+        except OSError:
+            QMessageBox.warning(
+                self,
+                self._tr("Insert Image..."),
+                self._tr("Could not copy image into note"),
+            )
+            return None
+        return f"images/{url_quote(candidate_name)}"
 
     def open_workspace(self):
         path = QFileDialog.getExistingDirectory(self, self._tr("Select workspace"))
@@ -2341,8 +2539,17 @@ class MainWindow(QMainWindow):
             return
         if not self._flush_pending_changes():
             return
-        name, ok = QInputDialog.getText(self, self._tr("New file"), self._tr("Filename (without .testlog):"))
-        if not ok or not name.strip():
+        dialog = QInputDialog(self)
+        dialog.setInputMode(QInputDialog.InputMode.TextInput)
+        dialog.setWindowTitle(self._tr("New file"))
+        dialog.setLabelText(self._tr("Filename (without .testlog):"))
+        dialog.resize(460, dialog.sizeHint().height())
+
+        if dialog.exec() != QInputDialog.DialogCode.Accepted:
+            return
+
+        name = dialog.textValue()
+        if not name.strip():
             return
         target_dir = self._selected_directory_for_new_items()
         path = os.path.join(target_dir, name.strip() + ".testlog")
@@ -2357,8 +2564,17 @@ class MainWindow(QMainWindow):
     def new_folder_in_workspace(self):
         if not self.workspace_dir:
             return
-        name, ok = QInputDialog.getText(self, self._tr("New folder"), self._tr("Folder name:"))
-        if not ok or not name.strip():
+        dialog = QInputDialog(self)
+        dialog.setInputMode(QInputDialog.InputMode.TextInput)
+        dialog.setWindowTitle(self._tr("New folder"))
+        dialog.setLabelText(self._tr("Folder name:"))
+        dialog.resize(460, dialog.sizeHint().height())
+
+        if dialog.exec() != QInputDialog.DialogCode.Accepted:
+            return
+
+        name = dialog.textValue()
+        if not name.strip():
             return
         target_dir = self._selected_directory_for_new_items()
         new_path = os.path.join(target_dir, name.strip())
@@ -2898,6 +3114,12 @@ class MainWindow(QMainWindow):
 
     def _copy_preview_text(self, text):
         QApplication.clipboard().setText(text)
+
+    def _show_preview_link_hover(self, url):
+        if url:
+            self.statusBar().showMessage(url)
+        else:
+            self.statusBar().clearMessage()
 
     def _style_headings(self, html):
         heading_styles = {

@@ -425,7 +425,9 @@ class TextToolDialog(QDialog):
             paragraphs[index % len(paragraphs)]
             for index in range(paragraph_count)
         ]
-        self.text_area.setPlainText("START\n\n" + "\n\n".join(generated_paragraphs) + "\n\nEND")
+        if generated_paragraphs:
+            generated_paragraphs[-1] = re.sub(r"\s*$", "", generated_paragraphs[-1])
+        self.text_area.setPlainText("\n\n".join(generated_paragraphs) + "\n###")
 
     def _show_counter_string_dialog(self):
         dialog = QDialog(self)
