@@ -35,7 +35,6 @@ EXCLUDED_MODULES = [
     "unittest",
     "pydoc",
     "doctest",
-    "difflib",
     "ftplib",
     "imaplib",
     "mailbox",
