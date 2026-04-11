@@ -9,6 +9,7 @@ import base64
 import tempfile
 import ctypes
 import threading
+from enum import Enum
 from urllib.parse import quote as url_quote, unquote as url_unquote, urlparse
 from pathlib import Path
 from PySide6.QtWidgets import (
@@ -56,6 +57,12 @@ try:
     from mdit_py_plugins.tasklists import tasklists_plugin
 except ImportError:
     tasklists_plugin = None
+
+
+class SortMode(Enum):
+    NAME = "name"
+    MODIFIED = "modified"
+    CREATED = "created"
 
 PREVIEW_ON_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 52">
   <rect x="0" y="0" width="72" height="52" rx="6" fill="none" stroke="#888" stroke-width="2"/>
@@ -1058,6 +1065,7 @@ class MainWindow(QMainWindow):
         self.diff_window = None
         self.pinned_files = self._load_pinned_files()
         self.pinned_paths = set(self.pinned_files)
+        self.sort_mode = SortMode.NAME
         self._syncing_scrollbars = False
         self._pending_preview_scroll_ratio = 0.0
         self._preview_loaded = False
@@ -1079,6 +1087,7 @@ class MainWindow(QMainWindow):
         self._new_session()
 
         self._setup_ui()
+        self.set_sort(self._load_sort_mode())
         self.refresh_pinned()
         geometry = self.settings.value("geometry")
         if geometry:
@@ -1356,6 +1365,13 @@ class MainWindow(QMainWindow):
 
     def _save_pinned_files(self):
         self.settings.setValue("pinned_files", self.pinned_files)
+
+    def _load_sort_mode(self):
+        saved_sort = self.settings.value("sort_mode", SortMode.NAME.value, type=str)
+        try:
+            return SortMode(saved_sort)
+        except ValueError:
+            return SortMode.NAME
 
     def _apply_editor_font(self):
         if not hasattr(self, "editor"):
@@ -1914,6 +1930,11 @@ class MainWindow(QMainWindow):
 
         self.btn_new_file.setText(self._tr("+ New File"))
         self.btn_new_folder.setText(self._tr("+ Folder"))
+        self.btn_sort.setToolTip(self._tr("Sorting"))
+        self.action_sort_name.setText(self._tr("Name (A-Z)"))
+        self.action_sort_modified.setText(self._tr("Last Modified"))
+        self.action_sort_created.setText(self._tr("Created"))
+        self._update_sort_button()
         self.sidebar_search.setPlaceholderText(self._tr("Search Files..."))
         self.find_input.setPlaceholderText(self._tr("Search Document..."))
         self.editor.setPlaceholderText(self._tr("Write Markdown here..."))
@@ -1958,8 +1979,38 @@ class MainWindow(QMainWindow):
         self.btn_new_file.clicked.connect(self.new_file_in_workspace)
         self.btn_new_folder = QPushButton("+ Mapp")
         self.btn_new_folder.clicked.connect(self.new_folder_in_workspace)
+        self.btn_sort = QToolButton()
+        self.btn_sort.setToolTip(self._tr("Sorting"))
+        self.btn_sort.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.btn_sort.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+
+        sort_menu = QMenu(self.btn_sort)
+        self.action_sort_name = QAction("Namn (A-Ö)", self)
+        self.action_sort_name.setCheckable(True)
+        self.action_sort_modified = QAction("Senast ändrad", self)
+        self.action_sort_modified.setCheckable(True)
+        self.action_sort_created = QAction("Skapad", self)
+        self.action_sort_created.setCheckable(True)
+
+        self.sort_group = QActionGroup(self)
+        self.sort_group.addAction(self.action_sort_name)
+        self.sort_group.addAction(self.action_sort_modified)
+        self.sort_group.addAction(self.action_sort_created)
+        self.sort_group.setExclusive(True)
+
+        self.action_sort_name.setChecked(True)
+        sort_menu.addAction(self.action_sort_name)
+        sort_menu.addAction(self.action_sort_modified)
+        sort_menu.addAction(self.action_sort_created)
+        self.btn_sort.setMenu(sort_menu)
+
+        self.action_sort_name.triggered.connect(lambda checked=False: self.set_sort(SortMode.NAME))
+        self.action_sort_modified.triggered.connect(lambda checked=False: self.set_sort(SortMode.MODIFIED))
+        self.action_sort_created.triggered.connect(lambda checked=False: self.set_sort(SortMode.CREATED))
+
         btn_row.addWidget(self.btn_new_file)
         btn_row.addWidget(self.btn_new_folder)
+        btn_row.addWidget(self.btn_sort)
         sidebar_layout.addLayout(btn_row)
 
         folder_icon = icon_from_svg(FOLDER_ICON_SVG, size=20)
@@ -1989,7 +2040,6 @@ class MainWindow(QMainWindow):
         self.tree.hideColumn(1)
         self.tree.hideColumn(2)
         self.tree.hideColumn(3)
-        self.tree.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self.tree.clicked.connect(self.tree_item_clicked)
         self.tree.doubleClicked.connect(self.tree_item_double_clicked)
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
@@ -2056,7 +2106,7 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.update_preview)
 
         self.autosave_timer = QTimer()
-        self.autosave_timer.setInterval(3000)
+        self.autosave_timer.setInterval(2000)
         self.autosave_timer.timeout.connect(self.autosave)
 
         self.editor.textChanged.connect(self.timer.start)
@@ -2147,6 +2197,7 @@ class MainWindow(QMainWindow):
         self.sidebar_search.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.btn_new_file.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.btn_new_folder.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.btn_sort.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.tree.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.editor.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.preview.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -2171,9 +2222,38 @@ class MainWindow(QMainWindow):
         focus_chain = [self.menuBar()] + [widget for widget in toolbar_widgets if widget is not None]
         for widget in focus_chain:
             widget.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-        focus_chain.extend([self.sidebar_search, self.btn_new_file, self.btn_new_folder, self.tree, self.editor, self.preview])
+        focus_chain.extend([self.sidebar_search, self.btn_new_file, self.btn_new_folder, self.btn_sort, self.tree, self.editor, self.preview])
         for current_widget, next_widget in zip(focus_chain, focus_chain[1:]):
             self.setTabOrder(current_widget, next_widget)
+
+    def set_sort(self, mode):
+        self.sort_mode = mode
+        if mode == SortMode.NAME:
+            sort_column = 0
+            sort_order = Qt.SortOrder.AscendingOrder
+            self.action_sort_name.setChecked(True)
+        elif mode == SortMode.MODIFIED:
+            sort_column = 3
+            sort_order = Qt.SortOrder.AscendingOrder
+            self.action_sort_modified.setChecked(True)
+        else:
+            sort_column = 0
+            sort_order = Qt.SortOrder.AscendingOrder
+            self.action_sort_created.setChecked(True)
+
+        self.fs_proxy_model.set_sort_mode(mode.value)
+        self.tree.sortByColumn(sort_column, sort_order)
+        self.settings.setValue("sort_mode", mode.value)
+        self._update_sort_button()
+
+    def _update_sort_button(self):
+        if self.sort_mode == SortMode.MODIFIED:
+            self.btn_sort.setText("Ny-Gl")
+            return
+        if self.sort_mode == SortMode.CREATED:
+            self.btn_sort.setText("Skap")
+            return
+        self.btn_sort.setText("A-Z")
 
     def _schedule_sidebar_search(self, text):
         self.sidebar_search_timer.start()
@@ -2818,7 +2898,7 @@ class MainWindow(QMainWindow):
         self.pinned_paths.clear()
         self.pinned_paths.update(self.pinned_files)
         self.fs_proxy_model.invalidate()
-        self.tree.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+        self.set_sort(self.sort_mode)
         self.tree.viewport().update()
 
     def show_context_menu(self, pos):
@@ -2895,7 +2975,7 @@ class MainWindow(QMainWindow):
         if current_abs == path_abs:
             self.current_file = new_path
             self.setWindowTitle(self._window_title(os.path.basename(new_path)))
-        self._select_file_in_tree(new_path)
+        self._select_file_in_tree(new_path, retry_attempts=6)
         self._start_fulltext_indexing()
 
     def _position_rename_dialog_cursor(self, dialog, current_name):
@@ -3290,9 +3370,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(self._window_title(os.path.basename(path)))
         self._select_file_in_tree(path)
 
-    def _select_file_in_tree(self, path):
+    def _select_file_in_tree(self, path, retry_attempts=0):
         source_index = self.fs_model.index(path)
         if not source_index.isValid():
+            if retry_attempts > 0:
+                QTimer.singleShot(
+                    100,
+                    lambda path=path, retry_attempts=retry_attempts - 1: self._select_file_in_tree(path, retry_attempts),
+                )
             return
 
         index = self.fs_proxy_model.mapFromSource(source_index)
@@ -3301,6 +3386,11 @@ class MainWindow(QMainWindow):
                 self.sidebar_search.clear()
                 index = self.fs_proxy_model.mapFromSource(source_index)
             if not index.isValid():
+                if retry_attempts > 0:
+                    QTimer.singleShot(
+                        100,
+                        lambda path=path, retry_attempts=retry_attempts - 1: self._select_file_in_tree(path, retry_attempts),
+                    )
                 return
 
         parent = index.parent()
@@ -3359,7 +3449,21 @@ class MainWindow(QMainWindow):
         self.editor.document().setModified(False)
         self.autosave_timer.stop()
         self._update_fulltext_index_for_file(path)
+        self._refresh_sidebar_sort()
         return True
+
+    def _refresh_sidebar_sort(self):
+        self.fs_proxy_model.invalidate()
+        if self.sort_mode == SortMode.MODIFIED:
+            sort_column = 3
+            sort_order = Qt.SortOrder.AscendingOrder
+        elif self.sort_mode == SortMode.CREATED:
+            sort_column = 0
+            sort_order = Qt.SortOrder.AscendingOrder
+        else:
+            sort_column = 0
+            sort_order = Qt.SortOrder.AscendingOrder
+        self.tree.sortByColumn(sort_column, sort_order)
 
     def _suggest_filename_from_heading(self):
         """Extract first heading from editor to use as filename."""
