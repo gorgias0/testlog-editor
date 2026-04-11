@@ -790,14 +790,21 @@ class FullTextSearchDialog(QDialog):
         self.setFixedWidth(600)
         self.setObjectName("fullTextSearchDialog")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._shadow_margin = 0 if sys.platform == "win32" else 10
 
         self.shadow = QGraphicsDropShadowEffect(self)
         self.shadow.setBlurRadius(32)
         self.shadow.setOffset(0, 12)
+        self.shadow.setEnabled(self._shadow_margin > 0)
         self.setGraphicsEffect(self.shadow)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(
+            self._shadow_margin,
+            self._shadow_margin,
+            self._shadow_margin,
+            self._shadow_margin,
+        )
         layout.setSpacing(0)
 
         self.frame = QWidget(self)
@@ -1034,7 +1041,7 @@ class FullTextSearchDialog(QDialog):
     def _sync_dialog_height(self):
         self.layout().activate()
         self.frame.layout().activate()
-        content_height = self.frame.sizeHint().height() + 20
+        content_height = self.frame.sizeHint().height() + (self._shadow_margin * 2)
         self.setFixedHeight(content_height)
         self.resize(self.width(), content_height)
 
@@ -1178,13 +1185,20 @@ class RecentFilesSwitcher(QDialog):
         self.setFixedWidth(560)
         self.setObjectName("recentFilesSwitcher")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._shadow_margin = 0 if sys.platform == "win32" else 10
         self.shadow = QGraphicsDropShadowEffect(self)
         self.shadow.setBlurRadius(32)
         self.shadow.setOffset(0, 12)
+        self.shadow.setEnabled(self._shadow_margin > 0)
         self.setGraphicsEffect(self.shadow)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(
+            self._shadow_margin,
+            self._shadow_margin,
+            self._shadow_margin,
+            self._shadow_margin,
+        )
         layout.setSpacing(0)
 
         self.frame = QWidget(self)
