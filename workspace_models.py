@@ -4,6 +4,10 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QFileInfo, QSortFilterProxyModel
 from PySide6.QtWidgets import QFileSystemModel
 
+from testlog_utils import TESTLOG_STATUS_LABELS, read_testlog_status_from_archive
+
+TESTLOG_STATUS_ROLE = Qt.ItemDataRole.UserRole + 20
+
 
 class WorkspaceFileSystemModel(QFileSystemModel):
     def __init__(
@@ -23,6 +27,7 @@ class WorkspaceFileSystemModel(QFileSystemModel):
         self.testlog_icon = testlog_icon
         self.testlog_pinned_icon = testlog_pinned_icon
         self.file_icon = file_icon
+        self._status_cache = {}
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.ToolTipRole:
@@ -43,6 +48,11 @@ class WorkspaceFileSystemModel(QFileSystemModel):
             path = self.filePath(index)
             if path.endswith(".testlog"):
                 return Path(path).stem
+
+        if role == TESTLOG_STATUS_ROLE and index.column() == 0:
+            path = self.filePath(index)
+            if path.endswith(".testlog") and not self.isDir(index):
+                return self._status_for_path(path)
 
         return super().data(index, role)
 
@@ -65,10 +75,35 @@ class WorkspaceFileSystemModel(QFileSystemModel):
         created = self._format_datetime(file_info.birthTime())
 
         return (
+            f"Status:   {TESTLOG_STATUS_LABELS[self._status_for_path(path)]}\n"
             f"Ändrad:   {modified}\n"
             f"Skapad:   {created}\n"
             f"Storlek:  {size_str}"
         )
+
+    def refresh_status(self, path):
+        self._status_cache.pop(path, None)
+        index = self.index(path)
+        if index.isValid():
+            self.dataChanged.emit(
+                index,
+                index,
+                [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole, TESTLOG_STATUS_ROLE],
+            )
+
+    def _status_for_path(self, path):
+        try:
+            modified = os.stat(path).st_mtime
+        except OSError:
+            return "todo"
+
+        cached = self._status_cache.get(path)
+        if cached is not None and cached[0] == modified:
+            return cached[1]
+
+        status = read_testlog_status_from_archive(path)
+        self._status_cache[path] = (modified, status)
+        return status
 
     @staticmethod
     def _format_datetime(date_time):
