@@ -1,10 +1,18 @@
 import os
 import re
+import zipfile
 from html import escape
 from urllib.parse import unquote, urlsplit
 from urllib.request import url2pathname
 
 
+TESTLOG_STATUS_OPTIONS = ("todo", "doing", "done")
+DEFAULT_TESTLOG_STATUS = "todo"
+TESTLOG_STATUS_LABELS = {
+    "todo": "Todo",
+    "doing": "Doing",
+    "done": "Done",
+}
 IMAGE_REFERENCE_PATTERN = re.compile(r'!\[.*?\]\(images/([^)]+)\)')
 HEADING_PATTERN = re.compile(r'^#+\s+(.+)$', re.MULTILINE)
 MARKDOWN_MIME_TYPES = (
@@ -16,10 +24,83 @@ CHECKBOX_PATTERN = re.compile(r"^\s*([☐☑☒])\s+(.*)$")
 BULLET_PATTERN = re.compile(r"^\s*[•◦▪‣·*-–—]\s+(.*)$")
 NUMBERED_LIST_PATTERN = re.compile(r"^\s*(\d+)[.)]\s+(.*)$")
 INDENTED_LINE_PATTERN = re.compile(r"^(?: {4,}|\t+).*$")
+FRONT_MATTER_DELIMITER = "---"
+STATUS_KEY_PATTERN = re.compile(r"^status\s*:\s*(.*?)\s*$", re.IGNORECASE)
 
 
 def collect_referenced_image_filenames(note_content):
     return set(IMAGE_REFERENCE_PATTERN.findall(note_content))
+
+
+def normalize_testlog_status(status):
+    normalized = (status or "").strip().lower()
+    return normalized if normalized in TESTLOG_STATUS_OPTIONS else DEFAULT_TESTLOG_STATUS
+
+
+def split_testlog_front_matter(text):
+    lines = (text or "").splitlines(keepends=True)
+    if not lines or lines[0].strip() != FRONT_MATTER_DELIMITER:
+        return [], text or "", False
+
+    for index in range(1, len(lines)):
+        if lines[index].strip() == FRONT_MATTER_DELIMITER:
+            return lines[1:index], "".join(lines[index + 1:]), True
+
+    return [], text or "", False
+
+
+def get_testlog_status(text):
+    metadata_lines, _, has_front_matter = split_testlog_front_matter(text)
+    if not has_front_matter:
+        return DEFAULT_TESTLOG_STATUS
+
+    for line in metadata_lines:
+        match = STATUS_KEY_PATTERN.match(line.strip())
+        if match:
+            return normalize_testlog_status(match.group(1))
+
+    return DEFAULT_TESTLOG_STATUS
+
+
+def strip_testlog_front_matter(text):
+    _, body, has_front_matter = split_testlog_front_matter(text)
+    return body.lstrip("\r\n") if has_front_matter else text or ""
+
+
+def set_testlog_status(text, status):
+    normalized_status = normalize_testlog_status(status)
+    metadata_lines, body, has_front_matter = split_testlog_front_matter(text)
+    status_line = f"status: {normalized_status}\n"
+
+    if not has_front_matter:
+        separator = "" if not text else "\n"
+        return f"---\n{status_line}---\n{separator}{text or ''}"
+
+    updated_lines = []
+    status_written = False
+    for line in metadata_lines:
+        if STATUS_KEY_PATTERN.match(line.strip()):
+            if not status_written:
+                updated_lines.append(status_line)
+                status_written = True
+            continue
+        updated_lines.append(line)
+
+    if not status_written:
+        updated_lines.append(status_line)
+
+    return "---\n" + "".join(updated_lines) + "---\n" + body
+
+
+def read_testlog_status_from_archive(path):
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            if "note.md" not in zf.namelist():
+                return DEFAULT_TESTLOG_STATUS
+            with zf.open("note.md") as note_file:
+                return get_testlog_status(note_file.read().decode("utf-8"))
+    except Exception:
+        return DEFAULT_TESTLOG_STATUS
 
 
 def suggest_filename_from_heading(text, default="export"):

@@ -17,15 +17,15 @@ from PySide6.QtWidgets import (
     QTextEdit, QFileDialog, QTreeView,
     QWidget, QVBoxLayout,
     QPushButton, QHBoxLayout, QInputDialog,
-    QToolBar, QStatusBar, QLabel,
+    QToolBar, QStatusBar, QLabel, QComboBox,
     QMenu, QMessageBox,
     QLineEdit, QStyle, QSizePolicy, QToolButton,
     QDialog, QDialogButtonBox, QFormLayout, QCheckBox,
     QListWidget, QListWidgetItem, QGraphicsDropShadowEffect,
-    QStyledItemDelegate,
+    QStyledItemDelegate, QStyleOptionViewItem,
 )
-from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, Signal, QItemSelectionModel, QSize, QPoint, QFileInfo
-from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument, QTextCharFormat, QSyntaxHighlighter, QDesktopServices
+from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, Signal, QItemSelectionModel, QSize, QPoint, QFileInfo, QRect
+from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument, QTextCharFormat, QSyntaxHighlighter, QDesktopServices, QPainter
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebChannel import QWebChannel
@@ -45,14 +45,22 @@ from text_tool_dialog import TextToolDialog
 from testlog_utils import (
     build_fulltext_search_results,
     collect_referenced_image_filenames,
+    DEFAULT_TESTLOG_STATUS,
+    get_testlog_status,
     guess_markdown_from_plain_text,
     highlight_fulltext_snippet,
+    normalize_testlog_status,
     preferred_markdown_paste_text,
+    read_testlog_status_from_archive,
     resolve_preview_image_path,
+    set_testlog_status,
     suggest_filename_from_heading,
+    strip_testlog_front_matter,
+    TESTLOG_STATUS_LABELS,
+    TESTLOG_STATUS_OPTIONS,
 )
 from translations import TRANSLATIONS
-from workspace_models import WorkspaceFileSystemModel, WorkspaceSortProxyModel
+from workspace_models import TESTLOG_STATUS_ROLE, WorkspaceFileSystemModel, WorkspaceSortProxyModel
 
 try:
     from mdit_py_plugins.tasklists import tasklists_plugin
@@ -740,7 +748,7 @@ def read_testlog_note_text(path):
             if "note.md" not in zf.namelist():
                 return None
             with zf.open("note.md") as note_file:
-                return note_file.read().decode("utf-8")
+                return strip_testlog_front_matter(note_file.read().decode("utf-8"))
     except Exception:
         return None
 
@@ -1115,6 +1123,7 @@ class RecentFileItemDelegate(QStyledItemDelegate):
         relative_path = item_data.get("relative_path", "")
         modified = item_data.get("modified", "")
         number = item_data.get("number")
+        status = item_data.get("status")
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
 
         painter.save()
@@ -1129,8 +1138,9 @@ class RecentFileItemDelegate(QStyledItemDelegate):
         number_width = 32 if number else 0
         text_left = left + number_width
         modified_width = 160 if modified else 0
-        text_width = rect.width() - text_left + rect.x() - modified_width - 28
-        filename_rect = rect.adjusted(text_left - rect.x(), 7, -(modified_width + 28), -26)
+        status_width = 18 if status else 0
+        text_width = rect.width() - text_left + rect.x() - modified_width - status_width - 28
+        filename_rect = rect.adjusted(text_left - rect.x(), 7, -(modified_width + status_width + 28), -26)
         path_rect = rect.adjusted(text_left - rect.x(), 29, -12, -8)
         modified_rect = rect.adjusted(rect.width() - modified_width - 16, 7, -16, -26)
 
@@ -1159,6 +1169,15 @@ class RecentFileItemDelegate(QStyledItemDelegate):
                 painter.fontMetrics().elidedText(modified, Qt.TextElideMode.ElideRight, modified_width),
             )
 
+        if status:
+            dot_size = 10
+            dot_x = modified_rect.left() - status_width + ((status_width - dot_size) // 2)
+            dot_y = filename_rect.center().y() - (dot_size // 2)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setBrush(QColor(WorkspaceTreeItemDelegate.STATUS_COLORS.get(status, WorkspaceTreeItemDelegate.STATUS_COLORS["todo"])))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(QRect(dot_x, dot_y, dot_size, dot_size))
+
         path_font = option.font
         path_font.setPointSize(max(8, path_font.pointSize() - 1))
         painter.setFont(path_font)
@@ -1172,6 +1191,37 @@ class RecentFileItemDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option, index):
         return QSize(540, 58)
+
+
+class WorkspaceTreeItemDelegate(QStyledItemDelegate):
+    STATUS_COLORS = {
+        "todo": "#737278",
+        "doing": "#2f5ca0",
+        "done": "#306440",
+    }
+
+    def paint(self, painter, option, index):
+        status = index.data(TESTLOG_STATUS_ROLE)
+        if not status:
+            super().paint(painter, option, index)
+            return
+
+        dot_space = 18
+        item_option = QStyleOptionViewItem(option)
+        item_option.rect = option.rect.adjusted(0, 0, -dot_space, 0)
+        super().paint(painter, item_option, index)
+
+        dot_size = 10
+        dot_x = option.rect.right() - dot_space + ((dot_space - dot_size) // 2)
+        dot_y = option.rect.center().y() - (dot_size // 2)
+        dot_rect = QRect(dot_x, dot_y, dot_size, dot_size)
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(QColor(self.STATUS_COLORS.get(status, self.STATUS_COLORS["todo"])))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(dot_rect)
+        painter.restore()
 
 
 class RecentFilesSwitcher(QDialog):
@@ -1448,6 +1498,7 @@ class RecentFilesSwitcher(QDialog):
             "filename": Path(path).stem,
             "relative_path": relative_path,
             "modified": QFileInfo(path).lastModified().toString("yyyy-MM-dd HH:mm"),
+            "status": read_testlog_status_from_archive(path),
         }
 
     def _move_selection(self, delta):
@@ -1500,6 +1551,7 @@ class MainWindow(QMainWindow):
         self.diff_window = None
         self.pinned_files = self._load_pinned_files()
         self.pinned_paths = set(self.pinned_files)
+        self.current_status = DEFAULT_TESTLOG_STATUS
         self.sort_mode = SortMode.NAME
         self.view_mode = ViewMode.SINGLE
         self._syncing_scrollbars = False
@@ -1998,15 +2050,29 @@ class MainWindow(QMainWindow):
             return
         self.workspace_dir = path
         self.fs_model.setRootPath(path)
-        root_index = self.fs_model.index(path)
-        if root_index.isValid():
-            self.tree.setRootIndex(self.fs_proxy_model.mapFromSource(root_index))
+        if self._set_tree_workspace_root():
             self.tree.update()
             self.setWindowTitle(self._window_title(os.path.basename(path)))
             self.statusBar().showMessage(self._tr("Workspace opened: {path}").format(path=path), 3000)
             self.settings.setValue("last_workspace", path)
             self._start_fulltext_indexing()
             self._open_most_recent_testlog()
+
+    def _set_tree_workspace_root(self):
+        if not self.workspace_dir:
+            return False
+
+        source_root = self.fs_model.index(self.workspace_dir)
+        if not source_root.isValid():
+            return False
+
+        proxy_root = self.fs_proxy_model.mapFromSource(source_root)
+        if not proxy_root.isValid():
+            return False
+
+        if self.tree.rootIndex() != proxy_root:
+            self.tree.setRootIndex(proxy_root)
+        return True
 
     def _setup_menu(self):
         menubar = self.menuBar()
@@ -2251,16 +2317,6 @@ class MainWindow(QMainWindow):
         self.toolbar_underline_action.triggered.connect(self.editor.format_underline)
         self.toolbar.addAction(self.toolbar_underline_action)
 
-        self.toolbar.addSeparator()
-
-        self.toolbar_inline_code_action = QAction(self)
-        self.toolbar_inline_code_action.triggered.connect(self.editor.format_inline_code)
-        self.toolbar.addAction(self.toolbar_inline_code_action)
-
-        self.toolbar_code_block_action = QAction(self)
-        self.toolbar_code_block_action.triggered.connect(self.editor.format_code_block)
-        self.toolbar.addAction(self.toolbar_code_block_action)
-
         self.toolbar_h1_action = QAction(self)
         self.toolbar_h1_action.triggered.connect(lambda: self._insert_line_prefix("# "))
         self.toolbar.addAction(self.toolbar_h1_action)
@@ -2287,10 +2343,6 @@ class MainWindow(QMainWindow):
         self.toolbar_numbered_action.triggered.connect(lambda: self._insert_line_prefix("1. "))
         self.toolbar.addAction(self.toolbar_numbered_action)
 
-        self.toolbar_quote_action = QAction(self)
-        self.toolbar_quote_action.triggered.connect(lambda: self._insert_line_prefix("> "))
-        self.toolbar.addAction(self.toolbar_quote_action)
-
         self.toolbar.addSeparator()
 
         self.toolbar_hr_action = QAction(self)
@@ -2307,6 +2359,17 @@ class MainWindow(QMainWindow):
         self.toolbar_diff_action.triggered.connect(self.open_diff_window)
         self.toolbar.addAction(self.toolbar_diff_action)
 
+        self.toolbar.addSeparator()
+
+        self.status_combo = QComboBox()
+        self.status_combo.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.status_combo.setFixedWidth(120)
+        for status in TESTLOG_STATUS_OPTIONS:
+            self.status_combo.addItem(TESTLOG_STATUS_LABELS[status], status)
+        self.status_combo.currentIndexChanged.connect(self._on_status_combo_changed)
+        self.toolbar.addWidget(self.status_combo)
+        self._set_status_combo(self.current_status)
+
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.toolbar.addWidget(spacer)
@@ -2321,6 +2384,8 @@ class MainWindow(QMainWindow):
 
         self.editor_preview_shortcut = QShortcut(QKeySequence("Ctrl+E"), self)
         self.editor_preview_shortcut.activated.connect(self.toggle_editor_preview)
+        self.editor_preview_f11_shortcut = QShortcut(QKeySequence(Qt.Key.Key_F11), self)
+        self.editor_preview_f11_shortcut.activated.connect(self.toggle_editor_preview)
         self.increase_font_shortcut = QShortcut(QKeySequence("Ctrl++"), self)
         self.increase_font_shortcut.activated.connect(self._increase_editor_font_size)
         self.increase_font_equal_shortcut = QShortcut(QKeySequence("Ctrl+="), self)
@@ -2331,6 +2396,44 @@ class MainWindow(QMainWindow):
         self.search_shortcut.activated.connect(self.open_fulltext_search)
         self.recent_switcher_shortcut = QShortcut(QKeySequence("Ctrl+R"), self)
         self.recent_switcher_shortcut.activated.connect(self.open_recent_switcher)
+
+    def _set_status_combo(self, status):
+        if not hasattr(self, "status_combo"):
+            return
+        normalized_status = normalize_testlog_status(status)
+        combo_index = self.status_combo.findData(normalized_status)
+        if combo_index < 0:
+            combo_index = self.status_combo.findData(DEFAULT_TESTLOG_STATUS)
+        self.status_combo.blockSignals(True)
+        self.status_combo.setCurrentIndex(combo_index)
+        self.status_combo.blockSignals(False)
+
+    def _sync_status_from_editor(self):
+        status = get_testlog_status(self.editor.toPlainText())
+        if status == self.current_status:
+            return
+        self.current_status = status
+        self._set_status_combo(status)
+
+    def _replace_editor_text_preserving_cursor(self, text):
+        cursor = self.editor.textCursor()
+        cursor_position = min(cursor.position(), len(text))
+        self.editor.setPlainText(text)
+        cursor.setPosition(cursor_position)
+        self.editor.setTextCursor(cursor)
+
+    def _on_status_combo_changed(self):
+        status = self.status_combo.currentData() or DEFAULT_TESTLOG_STATUS
+        if status == self.current_status and get_testlog_status(self.editor.toPlainText()) == status:
+            return
+
+        self.current_status = status
+        updated_text = set_testlog_status(self.editor.toPlainText(), status)
+        if updated_text != self.editor.toPlainText():
+            self._replace_editor_text_preserving_cursor(updated_text)
+            self.editor.document().setModified(True)
+            self.timer.start()
+            self.autosave_timer.start()
 
     def _retranslate_ui(self):
         self.file_menu.setTitle(self._with_mnemonic(self._tr("File")))
@@ -2407,10 +2510,6 @@ class MainWindow(QMainWindow):
         self.toolbar_italic_action.setToolTip(self._tr("Italic (Ctrl+I)"))
         self.toolbar_underline_action.setText("U")
         self.toolbar_underline_action.setToolTip(self._tr("Underline tooltip"))
-        self.toolbar_inline_code_action.setText("****")
-        self.toolbar_inline_code_action.setToolTip(self._tr("Inline code (`)"))
-        self.toolbar_code_block_action.setText("```")
-        self.toolbar_code_block_action.setToolTip(self._tr("Code block (Ctrl+Shift+K)"))
         self.toolbar_h1_action.setText("H1")
         self.toolbar_h1_action.setToolTip(self._tr("Heading 1 (Ctrl+1)"))
         self.toolbar_h2_action.setText("H2")
@@ -2423,15 +2522,17 @@ class MainWindow(QMainWindow):
         self.toolbar_bullet_action.setToolTip(self._tr("Bullet List"))
         self.toolbar_numbered_action.setText("1.")
         self.toolbar_numbered_action.setToolTip(self._tr("Numbered List"))
-        self.toolbar_quote_action.setText('"')
-        self.toolbar_quote_action.setToolTip(self._tr("Blockquote"))
         self.toolbar_hr_action.setText("─")
         self.toolbar_hr_action.setToolTip(self._tr("Horizontal Rule"))
         self.toolbar_text_tool_action.setText(self._tr("Text Tool"))
         self.toolbar_text_tool_action.setToolTip(self._tr("Text Tool"))
         self.toolbar_diff_action.setText(self._tr("Diff"))
         self.toolbar_diff_action.setToolTip(self._tr("Diff..."))
-        self.toggle_btn.setToolTip(self._tr("Toggle editor/preview (Ctrl+E)"))
+        for index in range(self.status_combo.count()):
+            status = self.status_combo.itemData(index)
+            self.status_combo.setItemText(index, self._tr(TESTLOG_STATUS_LABELS[status]))
+        self.status_combo.setToolTip(self._tr("Status"))
+        self.toggle_btn.setToolTip(self._tr("Toggle editor/preview (Ctrl+E or F11)"))
 
         self.btn_new_file.setText(self._tr("+ New File"))
         self.btn_new_folder.setText(self._tr("+ Folder"))
@@ -2538,6 +2639,7 @@ class MainWindow(QMainWindow):
 
         self.tree = QTreeView()
         self.tree.setModel(self.fs_proxy_model)
+        self.tree.setItemDelegate(WorkspaceTreeItemDelegate(self.tree))
         self.tree.setHeaderHidden(True)
         self.tree.setSortingEnabled(True)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -2548,6 +2650,8 @@ class MainWindow(QMainWindow):
         self.tree.clicked.connect(self.tree_item_clicked)
         self.tree.doubleClicked.connect(self.tree_item_double_clicked)
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
+        self.delete_tree_item_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.tree)
+        self.delete_tree_item_shortcut.activated.connect(self.delete_selected_tree_item)
         sidebar_layout.addWidget(self.tree)
 
         sidebar.setMinimumWidth(200)
@@ -2617,6 +2721,7 @@ class MainWindow(QMainWindow):
         self.editor.textChanged.connect(self.timer.start)
         self.editor.textChanged.connect(self.autosave_timer.start)
         self.editor.textChanged.connect(self._update_editor_counts)
+        self.editor.textChanged.connect(self._sync_status_from_editor)
         self.editor.cursorPositionChanged.connect(self._update_editor_counts)
         self.editor.cursorPositionChanged.connect(self._sync_find_current_match_from_cursor)
         self.editor.verticalScrollBar().valueChanged.connect(self._sync_preview_scroll)
@@ -2711,18 +2816,16 @@ class MainWindow(QMainWindow):
             self.toolbar.widgetForAction(self.toolbar_bold_action),
             self.toolbar.widgetForAction(self.toolbar_italic_action),
             self.toolbar.widgetForAction(self.toolbar_underline_action),
-            self.toolbar.widgetForAction(self.toolbar_inline_code_action),
-            self.toolbar.widgetForAction(self.toolbar_code_block_action),
             self.toolbar.widgetForAction(self.toolbar_h1_action),
             self.toolbar.widgetForAction(self.toolbar_h2_action),
             self.toolbar.widgetForAction(self.toolbar_h3_action),
             self.toolbar.widgetForAction(self.toolbar_h4_action),
             self.toolbar.widgetForAction(self.toolbar_bullet_action),
             self.toolbar.widgetForAction(self.toolbar_numbered_action),
-            self.toolbar.widgetForAction(self.toolbar_quote_action),
             self.toolbar.widgetForAction(self.toolbar_hr_action),
             self.toolbar.widgetForAction(self.toolbar_text_tool_action),
             self.toolbar.widgetForAction(self.toolbar_diff_action),
+            self.status_combo,
             self.toggle_btn,
         ]
         focus_chain = [self.menuBar()] + [widget for widget in toolbar_widgets if widget is not None]
@@ -2770,6 +2873,7 @@ class MainWindow(QMainWindow):
         if has_search and not getattr(self, "_tree_expanded_paths_before_search", None):
             self._tree_expanded_paths_before_search = self._expanded_tree_paths()
         self.fs_proxy_model.set_search(text)
+        self._set_tree_workspace_root()
         if has_search:
             self.tree.expandAll()
         elif getattr(self, "_tree_expanded_paths_before_search", None) is not None:
@@ -3472,10 +3576,22 @@ class MainWindow(QMainWindow):
         delete_action = menu.addAction(self._tr("Delete"))
         move_action = menu.addAction(self._tr("Move To..."))
         if is_file:
+            status_menu = menu.addMenu(self._tr("Status"))
+            status_actions = {}
+            current_status = get_testlog_status(self.editor.toPlainText()) if self.current_file and os.path.abspath(path) == os.path.abspath(self.current_file) else read_testlog_status_from_archive(path)
+            for status in TESTLOG_STATUS_OPTIONS:
+                action = status_menu.addAction(self._tr(TESTLOG_STATUS_LABELS[status]))
+                action.setCheckable(True)
+                action.setChecked(status == current_status)
+                status_actions[action] = status
             menu.addSeparator()
             pin_action = menu.addAction(self._tr("Unpin") if path in self.pinned_paths else self._tr("Pin to Top"))
+            menu.addSeparator()
+            archive_action = menu.addAction(self._tr("Archive"))
         else:
+            status_actions = {}
             pin_action = None
+            archive_action = None
 
         chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
         if chosen == rename_action:
@@ -3484,8 +3600,59 @@ class MainWindow(QMainWindow):
             self.delete_item(path)
         elif chosen == move_action:
             self.move_item(path)
+        elif chosen in status_actions:
+            self.set_file_status(path, status_actions[chosen])
         elif chosen == pin_action:
             self.toggle_pin(path)
+        elif chosen == archive_action:
+            self.archive_item(path)
+
+    def delete_selected_tree_item(self):
+        index = self.tree.currentIndex()
+        if not index.isValid():
+            return
+
+        source_index = self.fs_proxy_model.mapToSource(index)
+        path = self.fs_model.filePath(source_index)
+        is_file = path.endswith(".testlog") and os.path.isfile(path)
+        is_dir = os.path.isdir(path)
+        if is_file or is_dir:
+            self.delete_item(path)
+
+    def set_file_status(self, path, status):
+        normalized_status = normalize_testlog_status(status)
+        if not path.endswith(".testlog") or not os.path.isfile(path):
+            return
+
+        if self.current_file and os.path.abspath(path) == os.path.abspath(self.current_file):
+            self.current_status = normalized_status
+            self._set_status_combo(normalized_status)
+            updated_text = set_testlog_status(self.editor.toPlainText(), normalized_status)
+            if updated_text != self.editor.toPlainText():
+                self._replace_editor_text_preserving_cursor(updated_text)
+            self.save_file()
+            return
+
+        self._write_status_to_testlog(path, normalized_status)
+        self._update_fulltext_index_for_file(path)
+        self.fs_model.refresh_status(path)
+        self._refresh_sidebar_sort()
+
+    def _write_status_to_testlog(self, path, status):
+        entries = []
+        note_content = ""
+        with zipfile.ZipFile(path, "r") as zf:
+            for info in zf.infolist():
+                if info.filename == "note.md":
+                    note_content = zf.read(info.filename).decode("utf-8")
+                    continue
+                entries.append((info, zf.read(info.filename)))
+
+        note_content = set_testlog_status(note_content, status)
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("note.md", note_content)
+            for info, content in entries:
+                zf.writestr(info, content)
 
     def rename_item(self, path):
         current_name = Path(path).name if os.path.isdir(path) else Path(path).stem
@@ -3605,6 +3772,44 @@ class MainWindow(QMainWindow):
         self._select_file_in_tree(new_path)
         self._start_fulltext_indexing()
 
+    def archive_item(self, path):
+        if not self.workspace_dir or not path.endswith(".testlog") or not os.path.isfile(path):
+            return
+
+        if self.current_file and os.path.abspath(path) == os.path.abspath(self.current_file):
+            if not self._flush_pending_changes():
+                return
+
+        archive_dir = os.path.join(self.workspace_dir, self._archive_folder_name())
+        os.makedirs(archive_dir, exist_ok=True)
+
+        new_path = os.path.join(archive_dir, os.path.basename(path))
+        if os.path.abspath(new_path) == os.path.abspath(path):
+            return
+
+        new_path = self._available_path(new_path)
+        os.rename(path, new_path)
+        self._update_tracked_paths(path, new_path)
+        self.refresh_pinned()
+        self._select_file_in_tree(new_path, retry_attempts=6)
+        self._start_fulltext_indexing()
+
+    def _archive_folder_name(self):
+        return "Arkiv" if self.current_language == "sv" else "Archive"
+
+    def _available_path(self, path):
+        if not os.path.exists(path):
+            return path
+
+        directory = os.path.dirname(path)
+        stem, extension = os.path.splitext(os.path.basename(path))
+        counter = 2
+        while True:
+            candidate = os.path.join(directory, f"{stem} {counter}{extension}")
+            if not os.path.exists(candidate):
+                return candidate
+            counter += 1
+
     def toggle_pin(self, path):
         if path in self.pinned_files:
             self.pinned_files = [p for p in self.pinned_files if p != path]
@@ -3689,7 +3894,9 @@ class MainWindow(QMainWindow):
         path = os.path.join(target_dir, name.strip() + ".testlog")
         self.current_file = path
         self._new_session()
-        self.editor.setPlainText(f"# {name.strip()}\n")
+        self.current_status = DEFAULT_TESTLOG_STATUS
+        self._set_status_combo(self.current_status)
+        self.editor.setPlainText(set_testlog_status(f"# {name.strip()}\n", self.current_status))
         self.save_file()
         self._select_file_in_tree(path)
         self.tree.setFocus()
@@ -3886,7 +4093,9 @@ class MainWindow(QMainWindow):
         if not self._flush_pending_changes():
             return
         self.autosave_timer.stop()
-        self.editor.clear()
+        self.current_status = DEFAULT_TESTLOG_STATUS
+        self._set_status_combo(self.current_status)
+        self.editor.setPlainText(set_testlog_status("", self.current_status))
         self.current_file = None
         self._new_session()
         self.editor.document().setModified(False)
@@ -3912,9 +4121,16 @@ class MainWindow(QMainWindow):
             zf.extractall(self.session_dir)
 
         note_path = os.path.join(self.session_dir, "note.md")
+        self.current_status = DEFAULT_TESTLOG_STATUS
+        self._set_status_combo(self.current_status)
+        self.editor.clear()
         if os.path.exists(note_path):
             with open(note_path, "r", encoding="utf-8") as f:
-                self.editor.setPlainText(f.read())
+                note_content = f.read()
+                self.current_status = get_testlog_status(note_content)
+                note_content = set_testlog_status(note_content, self.current_status)
+                self._set_status_combo(self.current_status)
+                self.editor.setPlainText(note_content)
 
         self.current_file = path
         self.editor.document().setModified(False)
@@ -3985,7 +4201,7 @@ class MainWindow(QMainWindow):
         return True
 
     def _write_testlog(self, path):
-        note_content = self.editor.toPlainText()
+        note_content = set_testlog_status(self.editor.toPlainText(), self.current_status)
         note_path = os.path.join(self.session_dir, "note.md")
         with open(note_path, "w", encoding="utf-8") as f:
             f.write(note_content)
@@ -4003,6 +4219,7 @@ class MainWindow(QMainWindow):
         self.editor.document().setModified(False)
         self.autosave_timer.stop()
         self._update_fulltext_index_for_file(path)
+        self.fs_model.refresh_status(path)
         self._refresh_sidebar_sort()
         return True
 
@@ -4042,7 +4259,7 @@ class MainWindow(QMainWindow):
         return resolve_preview_image_path(src, self.session_dir)
 
     def _build_preview_body_html(self, interactive=False, theme_mode=None):
-        md = self.editor.toPlainText()
+        md = strip_testlog_front_matter(self.editor.toPlainText())
         rendered = self.md_parser.render(md)
         rendered = self._style_headings(rendered, theme_mode=theme_mode)
         rendered = self._style_code_blocks(rendered, interactive=interactive)

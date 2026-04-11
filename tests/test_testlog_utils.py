@@ -1,8 +1,13 @@
 from testlog_utils import (
+    DEFAULT_TESTLOG_STATUS,
     collect_referenced_image_filenames,
+    get_testlog_status,
     guess_markdown_from_plain_text,
+    normalize_testlog_status,
     preferred_markdown_paste_text,
     resolve_preview_image_path,
+    set_testlog_status,
+    strip_testlog_front_matter,
     suggest_filename_from_heading,
 )
 
@@ -28,6 +33,36 @@ def test_suggest_filename_from_heading_sanitizes_heading_text():
 
 def test_suggest_filename_from_heading_falls_back_when_heading_missing():
     assert suggest_filename_from_heading("plain text only") == "export"
+
+
+def test_get_testlog_status_reads_front_matter_status():
+    assert get_testlog_status("---\nstatus: doing\n---\n\n# Note") == "doing"
+
+
+def test_get_testlog_status_defaults_when_missing_or_unknown():
+    assert get_testlog_status("# Note") == DEFAULT_TESTLOG_STATUS
+    assert get_testlog_status("---\nstatus: blocked\n---\n\n# Note") == DEFAULT_TESTLOG_STATUS
+
+
+def test_normalize_testlog_status_accepts_known_statuses_case_insensitively():
+    assert normalize_testlog_status("Done") == "done"
+    assert normalize_testlog_status("nope") == DEFAULT_TESTLOG_STATUS
+
+
+def test_set_testlog_status_adds_front_matter_when_missing():
+    assert set_testlog_status("# Note\n", "done") == "---\nstatus: done\n---\n\n# Note\n"
+
+
+def test_set_testlog_status_updates_existing_front_matter_and_preserves_body():
+    text = "---\ntitle: Sample\nstatus: todo\n---\n\n# Note\n"
+
+    assert set_testlog_status(text, "doing") == "---\ntitle: Sample\nstatus: doing\n---\n\n# Note\n"
+
+
+def test_strip_testlog_front_matter_returns_renderable_body():
+    text = "---\nstatus: done\n---\n\n# Note\n"
+
+    assert strip_testlog_front_matter(text) == "# Note\n"
 
 
 def test_preferred_markdown_paste_text_prefers_markdown_mime_content():
