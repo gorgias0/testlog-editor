@@ -154,6 +154,8 @@ TRANSLATIONS = {
         "Move Item": "Flytta objekt",
         "Image copied": "Bild kopierad",
         "Copy": "Kopiera",
+        "Copy Link": "Kopiera länk",
+        "Open Link": "Öppna länk",
         "Copy Image": "Kopiera bild",
         "Copied": "✓ Kopierat",
         "Font Size": "Fontstorlek",

@@ -110,7 +110,10 @@ PREVIEW_STYLE = """
     margin: 2em 0;
   }
 
-  a { color: #0066cc; }
+  a {
+    color: #2563eb;
+    text-decoration: underline;
+  }
 
   #preview-content > :first-child {
     margin-top: 0 !important;

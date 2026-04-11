@@ -10,6 +10,8 @@ import tempfile
 import ctypes
 import threading
 from enum import Enum
+from html import escape as html_escape
+from html.parser import HTMLParser
 from urllib.parse import quote as url_quote, unquote as url_unquote, urlparse
 from pathlib import Path
 from PySide6.QtWidgets import (
@@ -27,7 +29,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, Signal, QItemSelectionModel, QSize, QPoint, QFileInfo, QRect
 from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument, QTextCharFormat, QSyntaxHighlighter, QDesktopServices, QPainter
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
+from PySide6.QtWebEngineCore import QWebEngineContextMenuRequest, QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebChannel import QWebChannel
 from markdown_it import MarkdownIt
 from styles import PREVIEW_STYLE
@@ -90,9 +92,11 @@ EDITOR_OFF_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72
 </svg>'''
 
 class Editor(QTextEdit):
-    def __init__(self, on_image_paste):
+    def __init__(self, on_image_paste, translate=lambda text: text, link_base_path=lambda: None):
         super().__init__()
         self.on_image_paste = on_image_paste
+        self._tr = translate
+        self._link_base_path = link_base_path
         self.setAcceptRichText(False)
         self._preview_scroll_sync_active = False
         self._preview_scroll_sync_timer = QTimer(self)
@@ -200,6 +204,81 @@ class Editor(QTextEdit):
     def wheelEvent(self, event):
         self._hold_preview_scroll_sync_briefly()
         super().wheelEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and event.modifiers() & Qt.KeyboardModifier.AltModifier:
+            link_url = self._link_at_position(self.cursorForPosition(event.pos()).position())
+            if link_url:
+                self.copy_link(link_url)
+                return
+        if event.button() == Qt.MouseButton.LeftButton and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            link_url = self._link_at_position(self.cursorForPosition(event.pos()).position())
+            if link_url:
+                self.open_link(link_url)
+                return
+        super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event):
+        link_url = self._link_at_position(self.cursorForPosition(event.pos()).position())
+        menu = self.createStandardContextMenu()
+        if link_url:
+            menu.insertSeparator(menu.actions()[0] if menu.actions() else None)
+            copy_link_action = QAction(self._tr("Copy Link"), menu)
+            copy_link_action.triggered.connect(lambda checked=False, url=link_url: self.copy_link(url))
+            open_link_action = QAction(self._tr("Open Link"), menu)
+            open_link_action.triggered.connect(lambda checked=False, url=link_url: self.open_link(url))
+            menu.insertAction(menu.actions()[0] if menu.actions() else None, copy_link_action)
+            menu.insertAction(copy_link_action, open_link_action)
+            open_link_action.setEnabled(not link_url.startswith("#"))
+        menu.exec(event.globalPos())
+        menu.deleteLater()
+
+    def copy_link(self, url):
+        QApplication.clipboard().setText(url)
+
+    def open_link(self, url):
+        if not url or url.startswith("#"):
+            return
+
+        parsed_url = urlparse(url)
+        if parsed_url.scheme:
+            target = QUrl(url)
+        else:
+            base_path = self._link_base_path()
+            if base_path:
+                target_path = url
+                fragment = ""
+                if "#" in target_path:
+                    target_path, fragment = target_path.split("#", 1)
+                    fragment = f"#{fragment}"
+                if target_path:
+                    target = QUrl.fromLocalFile(
+                        os.path.abspath(os.path.join(base_path, url_unquote(target_path)))
+                    )
+                    if fragment:
+                        target.setFragment(fragment[1:])
+                else:
+                    return
+            else:
+                target = QUrl.fromUserInput(url)
+
+        QDesktopServices.openUrl(target)
+
+    def _link_at_position(self, position):
+        text = self.toPlainText()
+        if not text:
+            return None
+
+        lookup_position = max(0, min(position, len(text) - 1))
+        for pattern, url_group in (
+            (r"!?\[[^\]\n]*\]\(([^)\s]+)(?:\s+['\"][^'\"]*['\"])?\)", 1),
+            (r"<((?:https?|ftp)://[^>\s]+|mailto:[^>\s]+)>", 1),
+            (r"((?:https?|ftp)://[^\s<>()]+|mailto:[^\s<>()]+)", 1),
+        ):
+            for match in re.finditer(pattern, text):
+                if match.start() <= lookup_position <= match.end():
+                    return match.group(url_group).rstrip(".,;:")
+        return None
 
     def _handle_smart_enter(self):
         cursor = self.textCursor()
@@ -591,7 +670,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
     def _build_formats(self):
         dark = self.theme_mode == "dark"
 
-        def make_format(*, foreground=None, background=None, bold=False, italic=False):
+        def make_format(*, foreground=None, background=None, bold=False, italic=False, underline=False):
             text_format = QTextCharFormat()
             if foreground is not None:
                 text_format.setForeground(QColor(foreground))
@@ -601,6 +680,8 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 text_format.setFontWeight(QFont.Weight.Bold)
             if italic:
                 text_format.setFontItalic(True)
+            if underline:
+                text_format.setFontUnderline(True)
             return text_format
 
         self.heading_line_formats = {
@@ -630,8 +711,8 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         self.emphasis_marker_format = make_format(foreground="#94a3b8" if not dark else "#6b7280")
         self.bold_text_format = make_format(foreground="#111827" if not dark else "#f9fafb", bold=True)
         self.italic_text_format = make_format(foreground="#1f2937" if not dark else "#e5e7eb", italic=True)
-        self.link_text_format = make_format(foreground="#2563eb" if not dark else "#93c5fd")
-        self.link_url_format = make_format(foreground="#7c3aed" if not dark else "#c4b5fd")
+        self.link_text_format = make_format(foreground="#2563eb" if not dark else "#93c5fd", underline=True)
+        self.link_url_format = make_format(foreground="#7c3aed" if not dark else "#c4b5fd", underline=True)
         self.image_alt_format = make_format(foreground="#0f766e" if not dark else "#5eead4")
         self.image_url_format = make_format(foreground="#b45309" if not dark else "#fdba74")
         self.rule_format = make_format(foreground="#94a3b8" if not dark else "#6b7280", bold=True)
@@ -717,10 +798,23 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             (4, self.link_url_format),
             (5, self.emphasis_marker_format),
         ])
+        self._apply_match_format(text, r"(<)((?:https?|ftp)://[^>\s]+|mailto:[^>\s]+)(>)", [
+            (1, self.emphasis_marker_format),
+            (2, self.link_url_format),
+            (3, self.emphasis_marker_format),
+        ])
+        self._apply_match_format(text, r"(?<![\](<])((?:https?|ftp)://[^\s<>()]+|mailto:[^\s<>()]+)", [
+            (1, self.link_url_format),
+        ])
 
 
 class PreviewPage(QWebEnginePage):
     def acceptNavigationRequest(self, url, nav_type, is_main_frame):
+        if (
+            nav_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked
+            and url.scheme().lower() == "file"
+        ):
+            return False
         if url.scheme().lower() not in {"", "about", "data", "file"}:
             QDesktopServices.openUrl(url)
             return False
@@ -740,6 +834,56 @@ class PreviewBridge(QObject):
     @Slot(int, bool)
     def toggleCheckbox(self, index, checked):
         self._checkbox_toggle_handler(index, checked)
+
+
+class PreviewBareUrlLinkifier(HTMLParser):
+    URL_PATTERN = re.compile(r"(?P<url>(?:https?|ftp)://[^\s<>()]+|mailto:[^\s<>()]+)")
+    SKIP_TAGS = {"a", "code", "pre", "script", "style"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.parts = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        self.parts.append(self.get_starttag_text())
+        if tag.lower() in self.SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_startendtag(self, tag, attrs):
+        self.parts.append(self.get_starttag_text())
+
+    def handle_endtag(self, tag):
+        self.parts.append(f"</{tag}>")
+        if tag.lower() in self.SKIP_TAGS and self._skip_depth > 0:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if self._skip_depth:
+            self.parts.append(html_escape(data))
+            return
+        self.parts.append(self.URL_PATTERN.sub(self._link_replacement, data))
+
+    def handle_entityref(self, name):
+        self.parts.append(f"&{name};")
+
+    def handle_charref(self, name):
+        self.parts.append(f"&#{name};")
+
+    def handle_comment(self, data):
+        self.parts.append(f"<!--{data}-->")
+
+    def _link_replacement(self, match):
+        url = match.group("url")
+        trailing = ""
+        while url and url[-1] in ".,;:":
+            trailing = url[-1] + trailing
+            url = url[:-1]
+        safe_url = html_escape(url, quote=True)
+        return f'<a href="{safe_url}">{html_escape(url)}</a>{html_escape(trailing)}'
+
+    def result(self):
+        return "".join(self.parts)
 
 
 def read_testlog_note_text(path):
@@ -1607,6 +1751,11 @@ class MainWindow(QMainWindow):
             return f"{base} - {filename}"
         return base
 
+    def _editor_link_base_path(self):
+        if self.current_file:
+            return os.path.dirname(self.current_file)
+        return self.workspace_dir
+
     def _theme_palette(self, theme_mode=None):
         active_theme = theme_mode or self.theme_mode
         if active_theme == "dark":
@@ -1618,7 +1767,7 @@ class MainWindow(QMainWindow):
                 "panel_border": "#4b5563",
                 "text": "#e6edf3",
                 "muted_text": "#adbac7",
-                "link": "#6cb6ff",
+                "link": "#93c5fd",
                 "code_bg": "#313843",
                 "code_border": "#4b5563",
                 "code_text": "#e6edf3",
@@ -1640,7 +1789,7 @@ class MainWindow(QMainWindow):
             "panel_border": "#c5cfdb",
             "text": "#17202b",
             "muted_text": "#526070",
-            "link": "#1459c7",
+            "link": "#2563eb",
             "code_bg": "#eef2f7",
             "code_border": "#cfd8e3",
             "code_text": "#273444",
@@ -2660,7 +2809,11 @@ class MainWindow(QMainWindow):
         # --- Inre splitter: editor | preview ---
         self.inner_splitter = QSplitter(Qt.Horizontal)
 
-        self.editor = Editor(on_image_paste=self.handle_image_paste)
+        self.editor = Editor(
+            on_image_paste=self.handle_image_paste,
+            translate=self._tr,
+            link_base_path=self._editor_link_base_path,
+        )
         self.editor.setPlaceholderText("Skriv Markdown här...")
         self._apply_editor_font()
         self.editor_highlighter = MarkdownHighlighter(self.editor.document(), theme_mode=self.theme_mode)
@@ -4261,9 +4414,16 @@ class MainWindow(QMainWindow):
     def _build_preview_body_html(self, interactive=False, theme_mode=None):
         md = strip_testlog_front_matter(self.editor.toPlainText())
         rendered = self.md_parser.render(md)
+        rendered = self._linkify_preview_bare_urls(rendered)
         rendered = self._style_headings(rendered, theme_mode=theme_mode)
         rendered = self._style_code_blocks(rendered, interactive=interactive)
         return self._sanitize_preview_html(rendered)
+
+    def _linkify_preview_bare_urls(self, html):
+        linkifier = PreviewBareUrlLinkifier()
+        linkifier.feed(html)
+        linkifier.close()
+        return linkifier.result()
 
     def _build_preview_html(self, interactive=False, theme_mode=None):
         body_html = self._build_preview_body_html(interactive=interactive, theme_mode=theme_mode)
@@ -4372,6 +4532,7 @@ class MainWindow(QMainWindow):
   }}
   a {{
     color: {palette["link"]};
+    text-decoration: underline;
   }}
   {self._preview_scrollbar_css(theme_mode=theme_mode)}
 </style>
@@ -4475,6 +4636,27 @@ class MainWindow(QMainWindow):
     }});
   }}
 
+  function bindLinks() {{
+    document.querySelectorAll('a[href]').forEach(function(link) {{
+      if (link.dataset.boundLinkCopy === '1') return;
+      link.dataset.boundLinkCopy = '1';
+      link.addEventListener('click', function(event) {{
+        if (link.protocol === 'file:') {{
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.altKey && window.previewBridge) {{
+            window.previewBridge.copyText(link.href);
+          }}
+          return;
+        }}
+        if (!event.altKey || !window.previewBridge) return;
+        event.preventDefault();
+        event.stopPropagation();
+        window.previewBridge.copyText(link.href);
+      }});
+    }});
+  }}
+
   window.setPreviewScrollRatio = function(ratio) {{
     const scrollMax = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
     window.scrollTo(0, scrollMax * ratio);
@@ -4489,6 +4671,7 @@ class MainWindow(QMainWindow):
     container.replaceChildren(...Array.from(template.content.childNodes));
     bindCopyButtons();
     bindCheckboxes();
+    bindLinks();
   }};
 
   document.addEventListener('DOMContentLoaded', function() {{
@@ -4496,17 +4679,43 @@ class MainWindow(QMainWindow):
       window.previewBridge = channel.objects.previewBridge;
       bindCopyButtons();
       bindCheckboxes();
+      bindLinks();
     }});
   }});
 </script>
 """
 
     def _show_preview_context_menu(self, pos):
+        request = self.preview.lastContextMenuRequest()
+        link_url = request.linkUrl() if request is not None else QUrl()
+        has_link = link_url.isValid() and not link_url.isEmpty()
+        is_image = (
+            request is not None
+            and request.mediaType() == QWebEngineContextMenuRequest.MediaType.MediaTypeImage
+        )
+
         menu = QMenu(self)
+        open_link_action = None
+        copy_link_action = None
+        copy_image_action = None
+        if has_link:
+            open_link_action = menu.addAction(self._tr("Open Link"))
+            copy_link_action = menu.addAction(self._tr("Copy Link"))
+            open_link_action.setEnabled(link_url.scheme().lower() != "file")
+            menu.addSeparator()
+        if is_image:
+            copy_image_action = menu.addAction(self._tr("Copy Image"))
+            menu.addSeparator()
         copy_text_action = menu.addAction(self._tr("Copy"))
         chosen = menu.exec(self.preview.mapToGlobal(pos))
 
-        if chosen == copy_text_action:
+        if chosen == open_link_action:
+            QDesktopServices.openUrl(link_url)
+        elif chosen == copy_link_action:
+            QApplication.clipboard().setText(link_url.toString())
+        elif chosen == copy_image_action:
+            self.preview.triggerPageAction(QWebEnginePage.WebAction.CopyImageToClipboard)
+        elif chosen == copy_text_action:
             self.preview.triggerPageAction(QWebEnginePage.WebAction.Copy)
 
     def _copy_preview_text(self, text):
