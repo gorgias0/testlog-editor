@@ -10,7 +10,6 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QAction, QFont, QIntValidator
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -222,39 +221,48 @@ class TextToolDialog(QDialog):
             self.resize(saved_size)
         self._special_character_samples = [
             (
-                "Null and control characters",
-                "Null och kontrolltecken",
-                ["\\x00", "\\t", "\\r\\n", "\\x1f"],
-            ),
-            (
-                "Emoji",
-                "Emoji",
-                ["😀", "🔥", "💀", "🧪", "✅", "❌", "⚠️"],
-            ),
-            (
-                "RTL text",
-                "RTL-text",
-                ["مرحبا", "שלום", "\u202eRTL override"],
-            ),
-            (
-                "Long Unicode strings",
-                "Långa Unicode-strängar",
-                ["Zalgo: H̷̳̄ȅ̸̬j̷̞̚ ̶̫̍v̵̳͗ä̷̻̀r̵̖͝l̷̟̕d̴̰̈́", "Kombinerade tecken: A\u0301 e\u0308 o\u030a n\u0303"],
+                "XSS",
+                "XSS",
+                [
+                    "<script>alert(1)</script>",
+                    "\"><img src=x onerror=alert(1)>",
+                    "<svg onload=alert(1)>",
+                    "javascript:alert(1)",
+                ],
             ),
             (
                 "SQL injection",
                 "SQL injection",
-                ["' OR '1'='1", "'; DROP TABLE users; --", "1; SELECT * FROM users"],
+                [
+                    "' OR '1'='1' --",
+                    "admin'--",
+                    "' UNION SELECT NULL,NULL--",
+                ],
             ),
             (
-                "XSS",
-                "XSS",
-                ["<script>alert('xss')</script>", "\"><img src=x onerror=alert(1)>", "javascript:alert(1)"],
+                "Path traversal",
+                "Path traversal",
+                [
+                    "../../../../etc/passwd",
+                    "..\\..\\..\\windows\\win.ini",
+                ],
             ),
             (
-                "Format strings",
-                "Formatsträngar",
-                ["%s %d %n", "{0} {{}}", "../../../../etc/passwd"],
+                "Command injection",
+                "Command injection",
+                [
+                    "; whoami",
+                    "&& whoami",
+                    "`whoami`",
+                ],
+            ),
+            (
+                "Template injection",
+                "Template injection",
+                [
+                    "{{7*7}}",
+                    "${7*7}",
+                ],
             ),
         ]
 
@@ -311,7 +319,7 @@ class TextToolDialog(QDialog):
         self.testdata_button.setMenu(self.testdata_menu)
         self.testdata_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self.special_characters_action = QAction(self)
-        self.special_characters_action.triggered.connect(self._show_special_characters_dialog)
+        self.special_characters_action.triggered.connect(self._insert_special_character_samples)
         self.copy_all_action = QAction(self)
         self.copy_all_action.triggered.connect(self._copy_all_text)
         self.clear_action = QAction(self)
@@ -471,27 +479,6 @@ class TextToolDialog(QDialog):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._generate_uuids(count_spinbox.value())
 
-    def _show_special_characters_dialog(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle(self._tr("Special Characters"))
-
-        layout = QVBoxLayout(dialog)
-        checkboxes = []
-        for key, _, _ in self._special_character_samples:
-            checkbox = QCheckBox(self._tr(key), dialog)
-            checkbox.setChecked(True)
-            layout.addWidget(checkbox)
-            checkboxes.append((key, checkbox))
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, parent=dialog)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(self._tr("Insert Selected"))
-        buttons.accepted.connect(dialog.accept)
-        layout.addWidget(buttons)
-
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            selected_keys = [key for key, checkbox in checkboxes if checkbox.isChecked()]
-            self._append_special_character_sections(selected_keys)
-
     def _generate_counter_string(self, length):
         result = ["*"] * length
         i = length
@@ -596,11 +583,9 @@ class TextToolDialog(QDialog):
             domain_parts = ["example"]
         return f"{''.join(domain_parts)}.{TESTDATA_EMAIL_TLDS[locale_code]}"
 
-    def _append_special_character_sections(self, selected_keys):
+    def _insert_special_character_samples(self):
         sections = []
-        for key, section_label, samples in self._special_character_samples:
-            if key not in selected_keys:
-                continue
+        for _, section_label, samples in self._special_character_samples:
             body = "\n".join(samples)
             sections.append(f"=== {section_label} ===\n{body}")
         if sections:
