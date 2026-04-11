@@ -21,9 +21,10 @@ from PySide6.QtWidgets import (
     QMenu, QMessageBox,
     QLineEdit, QStyle, QSizePolicy, QToolButton,
     QDialog, QDialogButtonBox, QFormLayout, QCheckBox,
-    QListWidget, QListWidgetItem, QGraphicsDropShadowEffect
+    QListWidget, QListWidgetItem, QGraphicsDropShadowEffect,
+    QStyledItemDelegate,
 )
-from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, Signal, QItemSelectionModel, QSize, QPoint
+from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, Signal, QItemSelectionModel, QSize, QPoint, QFileInfo
 from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument, QTextCharFormat, QSyntaxHighlighter, QDesktopServices
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
@@ -787,31 +788,41 @@ class FullTextSearchDialog(QDialog):
         self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self.setModal(False)
         self.setFixedWidth(600)
+        self.setObjectName("fullTextSearchDialog")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
         self.shadow = QGraphicsDropShadowEffect(self)
-        self.shadow.setBlurRadius(40)
-        self.shadow.setOffset(0, 16)
+        self.shadow.setBlurRadius(32)
+        self.shadow.setOffset(0, 12)
         self.setGraphicsEffect(self.shadow)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(0)
+
+        self.frame = QWidget(self)
+        self.frame.setObjectName("fullTextSearchFrame")
+        layout.addWidget(self.frame)
+
+        frame_layout = QVBoxLayout(self.frame)
+        frame_layout.setContentsMargins(2, 2, 2, 2)
+        frame_layout.setSpacing(0)
 
         self.search_input = QLineEdit(self)
         self.search_input.setPlaceholderText("Sök i alla dokument...")
-        layout.addWidget(self.search_input)
+        frame_layout.addWidget(self.search_input)
 
         self.status_label = QLabel(self)
         self.status_label.setStyleSheet("padding: 8px 12px; color: #64748b; font-size: 12px;")
         self.status_label.hide()
-        layout.addWidget(self.status_label)
+        frame_layout.addWidget(self.status_label)
 
         self.results_list = QListWidget(self)
         self.results_list.setMinimumHeight(0)
         self.results_list.setMaximumHeight(360)
         self.results_list.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.results_list.hide()
-        layout.addWidget(self.results_list)
+        frame_layout.addWidget(self.results_list)
 
         self.search_timer = QTimer(self)
         self.search_timer.setSingleShot(True)
@@ -828,14 +839,15 @@ class FullTextSearchDialog(QDialog):
         if theme_mode == "dark":
             colors = {
                 "dialog_bg": "#111827",
-                "dialog_border": "#475569",
+                "dialog_border": "#9ca3af",
                 "dialog_text": "#e6edf3",
                 "muted_text": "#9fb0c3",
                 "path_text": "#7f92a8",
-                "input_bg": "#0f172a",
+                "input_bg": "#111827",
                 "input_border": "#334155",
                 "result_hover": "#1e293b",
                 "result_selected": "#334155",
+                "selected_border": "#6cb6ff",
                 "result_selected_text": "#f8fafc",
                 "status_bg": "#162033",
                 "shadow": QColor(0, 0, 0, 150),
@@ -851,6 +863,7 @@ class FullTextSearchDialog(QDialog):
                 "input_border": "#d7e0eb",
                 "result_hover": "#eef4fb",
                 "result_selected": "#dbeafe",
+                "selected_border": "#2280e0",
                 "result_selected_text": "#0f172a",
                 "status_bg": "#f3f7fb",
                 "shadow": QColor(15, 23, 42, 85),
@@ -860,39 +873,47 @@ class FullTextSearchDialog(QDialog):
         self.shadow.setColor(colors["shadow"])
         self.setStyleSheet(
             f"""
-            QDialog {{
+            QDialog#fullTextSearchDialog {{
+                background: transparent;
+                border: none;
+            }}
+            QWidget#fullTextSearchFrame {{
                 background: {colors["dialog_bg"]};
                 color: {colors["dialog_text"]};
                 border: 2px solid {colors["dialog_border"]};
-                border-radius: 12px;
+                border-radius: 8px;
             }}
             QLineEdit {{
                 background: {colors["input_bg"]};
                 color: {colors["dialog_text"]};
-                font-size: 16px;
-                padding: 12px 14px;
+                font-size: 15px;
+                padding: 10px 12px;
                 border: none;
                 border-bottom: 1px solid {colors["input_border"]};
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
             }}
             QLineEdit::placeholder {{
                 color: {colors["muted_text"]};
             }}
             QListWidget {{
                 background: {colors["dialog_bg"]};
-                border: 1px solid {colors["input_border"]};
-                border-top: none;
+                border: none;
                 font-size: 13px;
                 outline: none;
+                border-bottom-left-radius: 6px;
+                border-bottom-right-radius: 6px;
             }}
             QListWidget::item {{
                 padding: 8px 12px;
-                border-bottom: 1px solid {colors["input_border"]};
+                border-left: 3px solid transparent;
             }}
             QListWidget::item:hover {{
                 background: {colors["result_hover"]};
             }}
             QListWidget::item:selected {{
                 background: {colors["result_selected"]};
+                border-left: 3px solid {colors["selected_border"]};
                 color: {colors["result_selected_text"]};
             }}
             """
@@ -905,16 +926,25 @@ class FullTextSearchDialog(QDialog):
     def open_for_workspace(self, workspace_dir, index, indexing_active=False, progress=None):
         self._workspace_dir = workspace_dir
         self._index = dict(index or {})
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "_show_modal_overlay"):
+            parent._show_modal_overlay()
         self._set_indexing_status(indexing_active, progress or (0, 0))
         self.search_input.clear()
         self.results_list.clear()
         self.results_list.hide()
         self.results_list.setFixedHeight(0)
-        self.adjustSize()
+        self._sync_dialog_height()
         self.show()
         self.raise_()
         self.activateWindow()
         self.search_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "_hide_modal_overlay"):
+            parent._hide_modal_overlay()
 
     def update_index(self, index):
         self._index = dict(index or {})
@@ -977,7 +1007,7 @@ class FullTextSearchDialog(QDialog):
         if not query:
             self.results_list.hide()
             self.results_list.setFixedHeight(0)
-            self.adjustSize()
+            self._sync_dialog_height()
             return
 
         self._results = build_fulltext_search_results(query, self._index)
@@ -999,7 +1029,14 @@ class FullTextSearchDialog(QDialog):
             self.results_list.setCurrentRow(0)
         else:
             self.results_list.setFixedHeight(0)
-        self.adjustSize()
+        self._sync_dialog_height()
+
+    def _sync_dialog_height(self):
+        self.layout().activate()
+        self.frame.layout().activate()
+        content_height = self.frame.sizeHint().height() + 20
+        self.setFixedHeight(content_height)
+        self.resize(self.width(), content_height)
 
     def _build_result_widget(self, result, query):
         container = QWidget(self.results_list)
@@ -1050,6 +1087,388 @@ class FullTextSearchDialog(QDialog):
             self._open_current_item(current_item)
 
 
+class RecentFileItemDelegate(QStyledItemDelegate):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.colors = {
+            "bg": "#ffffff",
+            "selected_bg": "#dbeafe",
+            "selected_border": "#2280e0",
+            "text": "#17202b",
+            "selected_text": "#0f172a",
+            "muted": "#64748b",
+        }
+
+    def set_colors(self, colors):
+        self.colors.update(colors)
+
+    def paint(self, painter, option, index):
+        item_data = index.data(Qt.ItemDataRole.UserRole) or {}
+        filename = item_data.get("filename", "")
+        relative_path = item_data.get("relative_path", "")
+        modified = item_data.get("modified", "")
+        number = item_data.get("number")
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+
+        painter.save()
+        rect = option.rect
+        if selected:
+            painter.fillRect(rect, QColor(self.colors["selected_bg"]))
+            painter.fillRect(rect.x(), rect.y(), 3, rect.height(), QColor(self.colors["selected_border"]))
+        else:
+            painter.fillRect(rect, QColor(self.colors["bg"]))
+
+        left = rect.x() + 12
+        number_width = 32 if number else 0
+        text_left = left + number_width
+        modified_width = 160 if modified else 0
+        text_width = rect.width() - text_left + rect.x() - modified_width - 28
+        filename_rect = rect.adjusted(text_left - rect.x(), 7, -(modified_width + 28), -26)
+        path_rect = rect.adjusted(text_left - rect.x(), 29, -12, -8)
+        modified_rect = rect.adjusted(rect.width() - modified_width - 16, 7, -16, -26)
+
+        if number:
+            number_rect = rect.adjusted(12, 7, -(rect.width() - number_width - 12), -26)
+            painter.setPen(QColor(self.colors["muted"]))
+            painter.drawText(number_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"{number}.")
+
+        filename_font = option.font
+        filename_font.setBold(True)
+        painter.setFont(filename_font)
+        painter.setPen(QColor(self.colors["selected_text"] if selected else self.colors["text"]))
+        painter.drawText(
+            filename_rect,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            option.fontMetrics.elidedText(filename, Qt.TextElideMode.ElideRight, text_width),
+        )
+        if modified:
+            modified_font = option.font
+            modified_font.setPointSize(max(8, modified_font.pointSize() - 1))
+            painter.setFont(modified_font)
+            painter.setPen(QColor(self.colors["muted"]))
+            painter.drawText(
+                modified_rect,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                painter.fontMetrics().elidedText(modified, Qt.TextElideMode.ElideRight, modified_width),
+            )
+
+        path_font = option.font
+        path_font.setPointSize(max(8, path_font.pointSize() - 1))
+        painter.setFont(path_font)
+        painter.setPen(QColor(self.colors["muted"]))
+        painter.drawText(
+            path_rect,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            option.fontMetrics.elidedText(relative_path, Qt.TextElideMode.ElideMiddle, text_width),
+        )
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        return QSize(540, 58)
+
+
+class RecentFilesSwitcher(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._workspace_dir = None
+        self._items = []
+
+        self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.setModal(False)
+        self.setFixedWidth(560)
+        self.setObjectName("recentFilesSwitcher")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.shadow = QGraphicsDropShadowEffect(self)
+        self.shadow.setBlurRadius(32)
+        self.shadow.setOffset(0, 12)
+        self.setGraphicsEffect(self.shadow)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(0)
+
+        self.frame = QWidget(self)
+        self.frame.setObjectName("recentFilesSwitcherFrame")
+        layout.addWidget(self.frame)
+
+        frame_layout = QVBoxLayout(self.frame)
+        frame_layout.setContentsMargins(2, 2, 2, 2)
+        frame_layout.setSpacing(0)
+
+        self.search_field = QLineEdit(self)
+        self.search_field.setPlaceholderText("Öppna fil...")
+        frame_layout.addWidget(self.search_field)
+
+        self.results_list = QListWidget(self)
+        self.item_delegate = RecentFileItemDelegate(self.results_list)
+        self.results_list.setItemDelegate(self.item_delegate)
+        self.results_list.setFixedHeight(8 * 58)
+        self.results_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.results_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        frame_layout.addWidget(self.results_list)
+
+        self.search_timer = QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(150)
+        self.search_timer.timeout.connect(self.update_list)
+
+        self.search_field.textChanged.connect(lambda _text: self.search_timer.start())
+        self.search_field.installEventFilter(self)
+        self.results_list.installEventFilter(self)
+        self.results_list.itemActivated.connect(lambda _item: self._open_selected())
+        self.results_list.itemClicked.connect(lambda _item: self._open_selected())
+
+        self.apply_theme(
+            {
+                "panel_bg": "#ffffff",
+                "panel_border": "#dddddd",
+                "text": "#17202b",
+                "muted_text": "#64748b",
+                "chrome_hover": "#dbeafe",
+            },
+            "light",
+        )
+
+    def apply_theme(self, palette, theme_mode):
+        if theme_mode == "dark":
+            colors = {
+                "bg": "#111827",
+                "border": "#9ca3af",
+                "text": palette["text"],
+                "muted": palette["muted_text"],
+                "selected_bg": palette["chrome_hover"],
+                "selected_border": "#6cb6ff",
+                "selected_text": palette["text"],
+                "input_border": "#334155",
+                "shadow": QColor(0, 0, 0, 150),
+            }
+        else:
+            colors = {
+                "bg": "#ffffff",
+                "border": "#94a3b8",
+                "text": "#17202b",
+                "muted": "#64748b",
+                "selected_bg": "#dbeafe",
+                "selected_border": "#2280e0",
+                "selected_text": "#0f172a",
+                "input_border": "#eeeeee",
+                "shadow": QColor(15, 23, 42, 90),
+            }
+
+        self.item_delegate.set_colors(colors)
+        self.shadow.setColor(colors["shadow"])
+        self.setStyleSheet(f"""
+            QDialog#recentFilesSwitcher {{
+                background: transparent;
+                border: none;
+            }}
+            QWidget#recentFilesSwitcherFrame {{
+                background: {colors["bg"]};
+                color: {colors["text"]};
+                border: 2px solid {colors["border"]};
+                border-radius: 8px;
+            }}
+            QLineEdit {{
+                background: {colors["bg"]};
+                color: {colors["text"]};
+                font-size: 15px;
+                padding: 10px 12px;
+                border: none;
+                border-bottom: 1px solid {colors["input_border"]};
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+            }}
+            QListWidget {{
+                border: none;
+                outline: none;
+                background: {colors["bg"]};
+                border-bottom-left-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }}
+            QListWidget::item {{
+                padding: 8px 12px;
+                border-left: 3px solid transparent;
+            }}
+            QListWidget::item:selected {{
+                background: {colors["selected_bg"]};
+                border-left: 3px solid {colors["selected_border"]};
+                color: {colors["selected_text"]};
+            }}
+        """)
+        self.results_list.viewport().update()
+
+    def open_for_workspace(self, workspace_dir):
+        self._workspace_dir = workspace_dir
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "_show_modal_overlay"):
+            parent._show_modal_overlay()
+        self.search_timer.stop()
+        self.search_field.clear()
+        self.update_list()
+        self.adjustSize()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.search_field.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        center = parent.rect().center()
+        x_pos = center.x() - self.width() // 2
+        y_pos = center.y() - 220
+        self.move(parent.mapToGlobal(QPoint(max(24, x_pos), max(80, y_pos))))
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        focused = QApplication.focusWidget()
+        if focused is None or (focused is not self and not self.isAncestorOf(focused)):
+            self.reject()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "_hide_modal_overlay"):
+            parent._hide_modal_overlay()
+
+    def eventFilter(self, obj, event):
+        if event.type() == event.Type.KeyPress and obj in (self.search_field, self.results_list):
+            if self._handle_key(event):
+                return True
+        return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event):
+        if not self._handle_key(event):
+            super().keyPressEvent(event)
+
+    def _handle_key(self, event):
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            self.reject()
+            return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._open_selected()
+            return True
+        if key == Qt.Key.Key_Down:
+            self._move_selection(1)
+            return True
+        if key == Qt.Key.Key_Up:
+            self._move_selection(-1)
+            return True
+        if key in (
+            Qt.Key.Key_1,
+            Qt.Key.Key_2,
+            Qt.Key.Key_3,
+            Qt.Key.Key_4,
+            Qt.Key.Key_5,
+            Qt.Key.Key_6,
+            Qt.Key.Key_7,
+            Qt.Key.Key_8,
+        ):
+            if not self.search_field.text():
+                self._open_at_index(int(key) - int(Qt.Key.Key_1))
+                return True
+        return False
+
+    def update_list(self):
+        query = self.search_field.text().strip().lower()
+        if query:
+            items = self._workspace_matches(query)
+        else:
+            items = self._recent_items()
+
+        self._items = items[:8]
+        self.results_list.clear()
+        for index, item_data in enumerate(self._items, start=1):
+            row_data = dict(item_data)
+            row_data["number"] = None if query else index
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, row_data)
+            item.setSizeHint(QSize(540, 58))
+            self.results_list.addItem(item)
+
+        if self.results_list.count():
+            self.results_list.setCurrentRow(0)
+
+    def _recent_items(self):
+        parent = self.parent()
+        if parent is None:
+            return []
+        paths = parent._recent_files()
+        items = []
+        for path in paths:
+            item_data = self._item_for_path(path)
+            if item_data is not None:
+                items.append(item_data)
+        return items
+
+    def _workspace_matches(self, query):
+        if not self._workspace_dir or not os.path.isdir(self._workspace_dir):
+            return []
+        matches = []
+        for root, _, filenames in os.walk(self._workspace_dir):
+            for filename in filenames:
+                if not filename.endswith(".testlog"):
+                    continue
+                if query not in Path(filename).stem.lower():
+                    continue
+                item_data = self._item_for_path(os.path.join(root, filename))
+                if item_data is not None:
+                    matches.append(item_data)
+        matches.sort(key=lambda item: item["filename"].lower())
+        return matches[:8]
+
+    def _item_for_path(self, path):
+        if not path or not os.path.exists(path) or not path.endswith(".testlog"):
+            return None
+        workspace_dir = self._workspace_dir
+        if workspace_dir and os.path.commonpath([os.path.abspath(workspace_dir), os.path.abspath(path)]) == os.path.abspath(workspace_dir):
+            relative_path = os.path.relpath(path, workspace_dir)
+        else:
+            relative_path = path
+        relative_path = os.path.splitext(relative_path)[0]
+        return {
+            "path": path,
+            "filename": Path(path).stem,
+            "relative_path": relative_path,
+            "modified": QFileInfo(path).lastModified().toString("yyyy-MM-dd HH:mm"),
+        }
+
+    def _move_selection(self, delta):
+        count = self.results_list.count()
+        if count == 0:
+            return
+        current_row = self.results_list.currentRow()
+        if current_row < 0:
+            current_row = 0
+        next_row = max(0, min(count - 1, current_row + delta))
+        self.results_list.setCurrentRow(next_row)
+
+    def _open_at_index(self, index):
+        if index < 0 or index >= self.results_list.count():
+            return
+        self.results_list.setCurrentRow(index)
+        self._open_selected()
+
+    def _open_selected(self):
+        item = self.results_list.currentItem()
+        if item is None:
+            return
+        item_data = item.data(Qt.ItemDataRole.UserRole) or {}
+        path = item_data.get("path")
+        if not path:
+            return
+        parent = self.parent()
+        if parent is not None:
+            if hasattr(parent, "_flush_pending_changes") and not parent._flush_pending_changes():
+                return
+            parent.open_testlog(path)
+            parent._add_to_recent(path)
+        self.accept()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1081,6 +1500,8 @@ class MainWindow(QMainWindow):
         self.fulltext_index_generation = 0
         self.fulltext_index_overrides = {}
         self.fulltext_search_dialog = None
+        self.recent_files_switcher = None
+        self.modal_overlay = None
         self.fulltext_index_signals = FullTextIndexSignals(self)
         self.fulltext_index_signals.progress.connect(self._on_fulltext_index_progress)
         self.fulltext_index_signals.complete.connect(self._on_fulltext_index_complete)
@@ -1369,6 +1790,22 @@ class MainWindow(QMainWindow):
     def _save_pinned_files(self):
         self.settings.setValue("pinned_files", self.pinned_files)
 
+    def _recent_files(self):
+        recent = self.settings.value("recent_files", [])
+        if isinstance(recent, str):
+            recent = [recent]
+        return [path for path in list(recent or []) if os.path.exists(path)]
+
+    def _add_to_recent(self, path):
+        if not path:
+            return
+        recent = self._recent_files()
+        if path in recent:
+            recent.remove(path)
+        recent.insert(0, path)
+        recent = [recent_path for recent_path in recent if os.path.exists(recent_path)]
+        self.settings.setValue("recent_files", recent[:8])
+
     def _load_sort_mode(self):
         saved_sort = self.settings.value("sort_mode", SortMode.NAME.value, type=str)
         try:
@@ -1502,6 +1939,8 @@ class MainWindow(QMainWindow):
             self.editor_highlighter.set_theme_mode(self.theme_mode)
         if self.fulltext_search_dialog is not None:
             self.fulltext_search_dialog.apply_theme(palette, self.theme_mode)
+        if self.recent_files_switcher is not None:
+            self.recent_files_switcher.apply_theme(palette, self.theme_mode)
 
     def _editor_selection_background_color(self):
         palette = self._theme_palette()
@@ -1526,6 +1965,19 @@ class MainWindow(QMainWindow):
             {self._editor_scrollbar_stylesheet()}
             """
         )
+
+    def _show_modal_overlay(self):
+        if self.modal_overlay is None:
+            self.modal_overlay = QWidget(self)
+            self.modal_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.modal_overlay.setGeometry(self.rect())
+        self.modal_overlay.setStyleSheet("background: rgba(0, 0, 0, 120);")
+        self.modal_overlay.show()
+        self.modal_overlay.raise_()
+
+    def _hide_modal_overlay(self):
+        if self.modal_overlay is not None:
+            self.modal_overlay.hide()
 
     def _set_workspace(self, path):
         if path != self.workspace_dir and not self._flush_pending_changes():
@@ -1863,6 +2315,8 @@ class MainWindow(QMainWindow):
         self.decrease_font_shortcut.activated.connect(self._decrease_editor_font_size)
         self.search_shortcut = QShortcut(QKeySequence("Ctrl+Shift+F"), self)
         self.search_shortcut.activated.connect(self.open_fulltext_search)
+        self.recent_switcher_shortcut = QShortcut(QKeySequence("Ctrl+R"), self)
+        self.recent_switcher_shortcut.activated.connect(self.open_recent_switcher)
 
     def _retranslate_ui(self):
         self.file_menu.setTitle(self._with_mnemonic(self._tr("File")))
@@ -2354,6 +2808,11 @@ class MainWindow(QMainWindow):
             return
         super().keyPressEvent(event)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.modal_overlay is not None and self.modal_overlay.isVisible():
+            self.modal_overlay.setGeometry(self.rect())
+
     def closeEvent(self, event):
         if not self._flush_pending_changes():
             event.ignore()
@@ -2465,6 +2924,17 @@ class MainWindow(QMainWindow):
             indexing_active=self.fulltext_indexing,
             progress=self.fulltext_index_progress,
         )
+
+    def open_recent_switcher(self):
+        if not self.workspace_dir or not os.path.isdir(self.workspace_dir):
+            self.statusBar().showMessage(self._tr("Select workspace first"), 3000)
+            return
+
+        if self.recent_files_switcher is None:
+            self.recent_files_switcher = RecentFilesSwitcher(self)
+        self.recent_files_switcher.apply_theme(self._theme_palette(), self.theme_mode)
+
+        self.recent_files_switcher.open_for_workspace(self.workspace_dir)
 
     def _open_find_bar_with_term(self, term):
         self.find_bar.setVisible(True)
@@ -3438,6 +3908,7 @@ class MainWindow(QMainWindow):
         self.update_preview()
         self.setWindowTitle(self._window_title(os.path.basename(path)))
         self._select_file_in_tree(path)
+        self._add_to_recent(path)
 
     def _select_file_in_tree(self, path, retry_attempts=0):
         source_index = self.fs_model.index(path)
