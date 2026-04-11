@@ -64,18 +64,20 @@ class SortMode(Enum):
     MODIFIED = "modified"
     CREATED = "created"
 
-PREVIEW_ON_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 52">
-  <rect x="0" y="0" width="72" height="52" rx="6" fill="none" stroke="#888" stroke-width="2"/>
-  <line x1="36" y1="2" x2="36" y2="50" stroke="#888" stroke-width="1.5"/>
-  <rect x="3" y="3" width="30" height="46" rx="4" fill="#555"/>
-  <rect x="39" y="3" width="30" height="46" rx="4" fill="#bbb"/>
+
+class ViewMode(Enum):
+    SINGLE = "single"
+    SPLIT = "split"
+
+
+EDITOR_ON_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 52">
+  <rect x="0" y="0" width="72" height="52" rx="6" fill="#555"/>
+  <text x="36" y="35" text-anchor="middle" font-family="monospace" font-size="18" font-weight="bold" fill="white">&lt;/&gt;</text>
 </svg>'''
 
-PREVIEW_OFF_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 52">
-  <rect x="0" y="0" width="72" height="52" rx="6" fill="none" stroke="#888" stroke-width="2"/>
-  <line x1="36" y1="2" x2="36" y2="50" stroke="#888" stroke-width="1.5"/>
-  <rect x="3" y="3" width="30" height="46" rx="4" fill="#555"/>
-  <rect x="39" y="3" width="30" height="46" rx="4" fill="#555"/>
+EDITOR_OFF_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 52">
+  <rect x="0" y="0" width="72" height="52" rx="6" fill="none" stroke="#aaa" stroke-width="2"/>
+  <text x="36" y="35" text-anchor="middle" font-family="monospace" font-size="18" font-weight="bold" fill="#aaa">&lt;/&gt;</text>
 </svg>'''
 
 class Editor(QTextEdit):
@@ -1066,6 +1068,7 @@ class MainWindow(QMainWindow):
         self.pinned_files = self._load_pinned_files()
         self.pinned_paths = set(self.pinned_files)
         self.sort_mode = SortMode.NAME
+        self.view_mode = ViewMode.SINGLE
         self._syncing_scrollbars = False
         self._pending_preview_scroll_ratio = 0.0
         self._preview_loaded = False
@@ -1094,9 +1097,9 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geometry)
         self._setup_menu()
         self._setup_toolbar()
-        preview_visible = self.settings.value("preview_visible", True, type=bool)
-        self.toggle_preview_btn.setChecked(preview_visible)
-        self.toggle_preview(preview_visible)
+        self.view_mode = self._load_view_mode()
+        self.action_split_view.setChecked(self.view_mode == ViewMode.SPLIT)
+        self.set_split_mode(self.view_mode == ViewMode.SPLIT)
         self._configure_focus_navigation()
         self._apply_theme()
         self._retranslate_ui()
@@ -1373,6 +1376,13 @@ class MainWindow(QMainWindow):
         except ValueError:
             return SortMode.NAME
 
+    def _load_view_mode(self):
+        saved_mode = self.settings.value("view_mode", ViewMode.SINGLE.value, type=str)
+        try:
+            return ViewMode(saved_mode)
+        except ValueError:
+            return ViewMode.SINGLE
+
     def _apply_editor_font(self):
         if not hasattr(self, "editor"):
             return
@@ -1400,6 +1410,22 @@ class MainWindow(QMainWindow):
         self.settings.setValue("editor_font_size", size)
         self._apply_editor_font()
         self._retranslate_ui()
+
+    def _increase_editor_font_size(self):
+        self._step_editor_font_size(1)
+
+    def _decrease_editor_font_size(self):
+        self._step_editor_font_size(-1)
+
+    def _step_editor_font_size(self, direction):
+        sizes = sorted(self.font_size_actions)
+        if not sizes:
+            return
+        if direction > 0:
+            next_size = next((size for size in sizes if size > self.editor_font_size), sizes[-1])
+        else:
+            next_size = next((size for size in reversed(sizes) if size < self.editor_font_size), sizes[0])
+        self._set_editor_font_size(next_size)
 
     def _set_theme_mode(self, mode):
         if mode == self.theme_mode:
@@ -1468,8 +1494,8 @@ class MainWindow(QMainWindow):
                 f"background: {palette['panel_bg']}; border: 1px solid {palette['panel_border']};"
             )
             self.preview.page().setBackgroundColor(QColor(palette["panel_bg"]))
-        if hasattr(self, "toggle_preview_btn"):
-            self.toggle_preview_btn.setStyleSheet(self._preview_toggle_button_stylesheet())
+        if hasattr(self, "toggle_btn"):
+            self.toggle_btn.setStyleSheet(self._preview_toggle_button_stylesheet())
         if hasattr(self, "toolbar"):
             self.toolbar.setStyleSheet(self._toolbar_stylesheet())
         if hasattr(self, "editor_highlighter"):
@@ -1625,7 +1651,7 @@ class MainWindow(QMainWindow):
         self.font_size_group = QActionGroup(self)
         self.font_size_group.setExclusive(True)
         self.font_size_actions = {}
-        for size in (10, 12, 14, 16, 18):
+        for size in (10, 11, 12, 13, 14):
             action = QAction(str(size), self)
             action.setCheckable(True)
             action.triggered.connect(lambda checked=False, s=size: self._set_editor_font_size(s))
@@ -1643,6 +1669,10 @@ class MainWindow(QMainWindow):
         self.theme_group.setExclusive(True)
         self.theme_group.addAction(self.light_mode_action)
         self.theme_group.addAction(self.dark_mode_action)
+        self.action_split_view = QAction(self)
+        self.action_split_view.setCheckable(True)
+        self.action_split_view.setShortcut("Ctrl+Shift+E")
+        self.action_split_view.triggered.connect(self.set_split_mode)
 
         self.open_workspace_action = QAction(self)
         self.open_workspace_action.triggered.connect(self.open_workspace)
@@ -1711,6 +1741,8 @@ class MainWindow(QMainWindow):
         self.insert_menu.addAction(self.link_menu_action)
         self.insert_menu.addAction(self.image_menu_action)
 
+        self.view_menu.addAction(self.action_split_view)
+        self.view_menu.addSeparator()
         self.view_menu.addMenu(self.font_size_menu)
         self.view_menu.addSeparator()
         self.view_menu.addAction(self.light_mode_action)
@@ -1813,18 +1845,22 @@ class MainWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.toolbar.addWidget(spacer)
 
-        self.toggle_preview_btn = QToolButton()
-        self.toggle_preview_btn.setIcon(icon_from_svg(PREVIEW_ON_ICON_SVG, size=32))
-        self.toggle_preview_btn.setIconSize(QSize(32, 24))
-        self.toggle_preview_btn.setCheckable(True)
-        self.toggle_preview_btn.setChecked(True)
-        self.toggle_preview_btn.setFixedSize(44, 32)
-        self.toggle_preview_btn.setStyleSheet(self._preview_toggle_button_stylesheet())
-        self.toggle_preview_btn.clicked.connect(self.toggle_preview)
-        self.toolbar.addWidget(self.toggle_preview_btn)
+        self.toggle_btn = QToolButton()
+        self.toggle_btn.setIconSize(QSize(32, 24))
+        self.toggle_btn.setFixedSize(44, 32)
+        self.toggle_btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.toggle_btn.setStyleSheet(self._preview_toggle_button_stylesheet())
+        self.toggle_btn.clicked.connect(lambda checked=False: self.toggle_editor_preview())
+        self.toolbar.addWidget(self.toggle_btn)
 
-        self.preview_shortcut = QShortcut(QKeySequence("Ctrl+Shift+P"), self)
-        self.preview_shortcut.activated.connect(lambda: self.toggle_preview_btn.click())
+        self.editor_preview_shortcut = QShortcut(QKeySequence("Ctrl+E"), self)
+        self.editor_preview_shortcut.activated.connect(self.toggle_editor_preview)
+        self.increase_font_shortcut = QShortcut(QKeySequence("Ctrl++"), self)
+        self.increase_font_shortcut.activated.connect(self._increase_editor_font_size)
+        self.increase_font_equal_shortcut = QShortcut(QKeySequence("Ctrl+="), self)
+        self.increase_font_equal_shortcut.activated.connect(self._increase_editor_font_size)
+        self.decrease_font_shortcut = QShortcut(QKeySequence("Ctrl+-"), self)
+        self.decrease_font_shortcut.activated.connect(self._decrease_editor_font_size)
         self.search_shortcut = QShortcut(QKeySequence("Ctrl+Shift+F"), self)
         self.search_shortcut.activated.connect(self.open_fulltext_search)
 
@@ -1883,6 +1919,7 @@ class MainWindow(QMainWindow):
         self.link_menu_action.setText(self._tr("Insert Link..."))
         self.image_menu_action.setText(self._tr("Insert Image..."))
         self.font_size_menu.setTitle(self._tr("Font Size"))
+        self.action_split_view.setText(self._tr("Split View"))
         self.light_mode_action.setText(self._tr("Light Mode"))
         self.dark_mode_action.setText(self._tr("Dark Mode"))
         for size, action in self.font_size_actions.items():
@@ -1926,7 +1963,7 @@ class MainWindow(QMainWindow):
         self.toolbar_text_tool_action.setToolTip(self._tr("Text Tool"))
         self.toolbar_diff_action.setText(self._tr("Diff"))
         self.toolbar_diff_action.setToolTip(self._tr("Diff..."))
-        self.toggle_preview_btn.setToolTip(self._tr("Show/hide preview (Ctrl+Shift+P)"))
+        self.toggle_btn.setToolTip(self._tr("Toggle editor/preview (Ctrl+E)"))
 
         self.btn_new_file.setText(self._tr("+ New File"))
         self.btn_new_folder.setText(self._tr("+ Folder"))
@@ -2218,6 +2255,7 @@ class MainWindow(QMainWindow):
             self.toolbar.widgetForAction(self.toolbar_hr_action),
             self.toolbar.widgetForAction(self.toolbar_text_tool_action),
             self.toolbar.widgetForAction(self.toolbar_diff_action),
+            self.toggle_btn,
         ]
         focus_chain = [self.menuBar()] + [widget for widget in toolbar_widgets if widget is not None]
         for widget in focus_chain:
@@ -2322,25 +2360,56 @@ class MainWindow(QMainWindow):
             return
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("outer_splitter", self.outer_splitter.saveState())
-        self.settings.setValue("inner_splitter", self.inner_splitter.saveState())
-        self.settings.setValue("preview_visible", self.toggle_preview_btn.isChecked())
+        if self.view_mode == ViewMode.SPLIT:
+            self.settings.setValue("inner_splitter", self.inner_splitter.saveState())
+            self.settings.setValue("inner_splitter_sizes", self.inner_splitter.saveState())
+        self.settings.setValue("view_mode", self.view_mode.value)
         super().closeEvent(event)
 
-    def toggle_preview(self, checked: bool):
-        if checked:
-            self.toggle_preview_btn.setIcon(icon_from_svg(PREVIEW_ON_ICON_SVG, size=32))
+    def toggle_editor_preview(self):
+        if self.view_mode != ViewMode.SINGLE:
+            return
+        if self.editor_panel.isVisible():
+            self.editor_panel.setVisible(False)
+            self.preview.setVisible(True)
+            self.update_preview()
         else:
-            self.toggle_preview_btn.setIcon(icon_from_svg(PREVIEW_OFF_ICON_SVG, size=32))
-        if not checked:
-            self.settings.setValue("inner_splitter_sizes", self.inner_splitter.saveState())
-        self.preview.setVisible(checked)
-        if checked:
+            self.editor_panel.setVisible(True)
+            self.preview.setVisible(False)
+            self.editor.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._update_toggle_icon()
+
+    def set_split_mode(self, enabled):
+        if enabled:
+            self.view_mode = ViewMode.SPLIT
+            self.editor_panel.setVisible(True)
+            self.preview.setVisible(True)
             sizes = self.settings.value("inner_splitter_sizes")
             if sizes:
                 self.inner_splitter.restoreState(sizes)
             else:
                 total = self.inner_splitter.width()
-                self.inner_splitter.setSizes([total // 2, total // 2])
+                half = max(1, total // 2)
+                self.inner_splitter.setSizes([half, half])
+            self.toggle_btn.setVisible(False)
+            self.update_preview()
+        else:
+            if self.view_mode == ViewMode.SPLIT:
+                self.settings.setValue("inner_splitter_sizes", self.inner_splitter.saveState())
+            self.view_mode = ViewMode.SINGLE
+            self.editor_panel.setVisible(True)
+            self.preview.setVisible(False)
+            self.toggle_btn.setVisible(True)
+            self._update_toggle_icon()
+        if self.action_split_view.isChecked() != enabled:
+            self.action_split_view.setChecked(enabled)
+        self.settings.setValue("view_mode", self.view_mode.value)
+
+    def _update_toggle_icon(self):
+        if self.editor_panel.isVisible():
+            self.toggle_btn.setIcon(icon_from_svg(EDITOR_ON_ICON_SVG, size=32))
+            return
+        self.toggle_btn.setIcon(icon_from_svg(EDITOR_OFF_ICON_SVG, size=32))
 
     def _editor_selected_or_all_text(self):
         cursor = self.editor.textCursor()
@@ -3487,15 +3556,15 @@ class MainWindow(QMainWindow):
     def _resolve_preview_image_path(self, src):
         return resolve_preview_image_path(src, self.session_dir)
 
-    def _build_preview_body_html(self, interactive=False):
+    def _build_preview_body_html(self, interactive=False, theme_mode=None):
         md = self.editor.toPlainText()
         rendered = self.md_parser.render(md)
-        rendered = self._style_headings(rendered)
+        rendered = self._style_headings(rendered, theme_mode=theme_mode)
         rendered = self._style_code_blocks(rendered, interactive=interactive)
         return self._sanitize_preview_html(rendered)
 
     def _build_preview_html(self, interactive=False, theme_mode=None):
-        body_html = self._build_preview_body_html(interactive=interactive)
+        body_html = self._build_preview_body_html(interactive=interactive, theme_mode=theme_mode)
         html = PREVIEW_STYLE + self._preview_theme_assets(theme_mode=theme_mode)
         if interactive:
             html += self._preview_interaction_assets(theme_mode=theme_mode)
@@ -3554,6 +3623,7 @@ class MainWindow(QMainWindow):
 
     def _preview_theme_assets(self, theme_mode=None):
         palette = self._theme_palette(theme_mode=theme_mode)
+        heading_colors = self._preview_heading_colors(theme_mode=theme_mode)
         return f"""
 <style>
   meta[http-equiv="Content-Security-Policy"] {{
@@ -3564,6 +3634,18 @@ class MainWindow(QMainWindow):
   }}
   body, p, li, td, th, blockquote {{
     color: {palette["text"]};
+  }}
+  h1 {{
+    color: {heading_colors[1]};
+  }}
+  h2 {{
+    color: {heading_colors[2]};
+  }}
+  h3 {{
+    color: {heading_colors[3]};
+  }}
+  h4 {{
+    color: {heading_colors[4]};
   }}
   code, .code-wrapper {{
     background: {palette["code_bg"]} !important;
@@ -3734,16 +3816,26 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().clearMessage()
 
-    def _style_headings(self, html):
+    def _preview_heading_colors(self, theme_mode=None):
+        dark = (theme_mode or self.theme_mode) == "dark"
+        return {
+            1: "#93c5fd" if dark else "#1d4ed8",
+            2: "#7dd3fc" if dark else "#2563eb",
+            3: "#5eead4" if dark else "#0f766e",
+            4: "#c4b5fd" if dark else "#7c3aed",
+        }
+
+    def _style_headings(self, html, theme_mode=None):
+        heading_colors = self._preview_heading_colors(theme_mode=theme_mode)
         heading_styles = {
             "h1": "font-size: 24px; font-family: 'Source Sans 3', 'Noto Sans', Arial, sans-serif; "
-                  "font-weight: 700; color: #2563eb; margin-top: 1.2em; margin-bottom: 0.3em;",
+                  f"font-weight: 700; color: {heading_colors[1]}; margin-top: 1.2em; margin-bottom: 0.3em;",
             "h2": "font-size: 20px; font-family: 'Source Sans 3', 'Noto Sans', Arial, sans-serif; "
-                  "font-weight: 700; color: #2563eb; margin-top: 1.1em; margin-bottom: 0.25em;",
+                  f"font-weight: 700; color: {heading_colors[2]}; margin-top: 1.1em; margin-bottom: 0.25em;",
             "h3": "font-size: 18px; font-family: 'Source Sans 3', 'Noto Sans', Arial, sans-serif; "
-                  "font-weight: 700; color: #2563eb; margin-top: 1em; margin-bottom: 0.2em;",
+                  f"font-weight: 700; color: {heading_colors[3]}; margin-top: 1em; margin-bottom: 0.2em;",
             "h4": "font-size: 17px; font-family: 'Source Sans 3', 'Noto Sans', Arial, sans-serif; "
-                  "font-weight: 600; color: #2563eb; margin-top: 0.9em; margin-bottom: 0.2em;",
+                  f"font-weight: 600; color: {heading_colors[4]}; margin-top: 0.9em; margin-bottom: 0.2em;",
         }
 
         for tag, style in heading_styles.items():

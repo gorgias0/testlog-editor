@@ -7,8 +7,7 @@ PREVIEW_STYLE = """
     font-size: 17px;
     line-height: 1.34;
     color: #1a1a1a;
-    max-width: 800px;
-    margin: 0 auto;
+    margin: 0;
     padding: 4px 16px 12px;
   }
 
