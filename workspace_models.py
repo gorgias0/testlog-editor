@@ -1,6 +1,7 @@
+import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSortFilterProxyModel
+from PySide6.QtCore import Qt, QFileInfo, QSortFilterProxyModel
 from PySide6.QtWidgets import QFileSystemModel
 
 
@@ -24,6 +25,11 @@ class WorkspaceFileSystemModel(QFileSystemModel):
         self.file_icon = file_icon
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.ToolTipRole:
+            path = self.filePath(index)
+            if path.endswith(".testlog") and not self.isDir(index):
+                return self._build_tooltip(path)
+
         if role == Qt.ItemDataRole.DecorationRole and index.column() == 0:
             path = self.filePath(index)
             is_pinned = path in self.pinned_paths
@@ -40,6 +46,36 @@ class WorkspaceFileSystemModel(QFileSystemModel):
 
         return super().data(index, role)
 
+    def _build_tooltip(self, path):
+        try:
+            stat_result = os.stat(path)
+        except OSError:
+            return ""
+
+        size_bytes = stat_result.st_size
+        if size_bytes < 1024:
+            size_str = f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            size_str = f"{size_bytes / 1024:.1f} KB"
+        else:
+            size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
+
+        file_info = QFileInfo(path)
+        modified = file_info.lastModified().toString("yyyy-MM-dd HH:mm")
+        created = self._format_datetime(file_info.birthTime())
+
+        return (
+            f"Ändrad:   {modified}\n"
+            f"Skapad:   {created}\n"
+            f"Storlek:  {size_str}"
+        )
+
+    @staticmethod
+    def _format_datetime(date_time):
+        if not date_time.isValid():
+            return "Ej tillgänglig"
+        return date_time.toString("yyyy-MM-dd HH:mm")
+
 
 class WorkspaceSortProxyModel(QSortFilterProxyModel):
     def __init__(self, source_model, pinned_paths=None, parent=None):
@@ -47,7 +83,9 @@ class WorkspaceSortProxyModel(QSortFilterProxyModel):
         self._source_model = source_model
         self.pinned_paths = pinned_paths if pinned_paths is not None else set()
         self.search_term = ""
+        self.sort_mode = "name"
         self.setSourceModel(source_model)
+        self.setDynamicSortFilter(True)
         self.setRecursiveFilteringEnabled(True)
 
     def lessThan(self, left, right):
@@ -64,15 +102,48 @@ class WorkspaceSortProxyModel(QSortFilterProxyModel):
         if left_rank != right_rank:
             return left_rank < right_rank
 
-        left_name = Path(left_path).stem if left_path.endswith(".testlog") else self._source_model.fileName(left)
-        right_name = Path(right_path).stem if right_path.endswith(".testlog") else self._source_model.fileName(right)
-        return left_name.lower() < right_name.lower()
+        if self.sort_mode == "name":
+            left_name = Path(left_path).stem if left_path.endswith(".testlog") else self._source_model.fileName(left)
+            right_name = Path(right_path).stem if right_path.endswith(".testlog") else self._source_model.fileName(right)
+            return left_name.lower() < right_name.lower()
+
+        if self.sort_mode in ("modified", "created"):
+            left_timestamp = self._timestamp(left_path, self.sort_mode)
+            right_timestamp = self._timestamp(right_path, self.sort_mode)
+            if left_timestamp != right_timestamp:
+                return left_timestamp > right_timestamp
+            left_name = Path(left_path).stem if left_path.endswith(".testlog") else self._source_model.fileName(left)
+            right_name = Path(right_path).stem if right_path.endswith(".testlog") else self._source_model.fileName(right)
+            return left_name.lower() < right_name.lower()
+
+        return super().lessThan(left, right)
+
+    @staticmethod
+    def _timestamp(path, sort_mode):
+        if sort_mode == "created":
+            return WorkspaceSortProxyModel._created_timestamp(path)
+        try:
+            stat_result = os.stat(path)
+        except OSError:
+            return 0.0
+        return stat_result.st_mtime
+
+    @staticmethod
+    def _created_timestamp(path):
+        created = QFileInfo(path).birthTime()
+        if not created.isValid():
+            return 0.0
+        return created.toSecsSinceEpoch()
+
+    def set_sort_mode(self, mode):
+        self.sort_mode = mode
+        self.invalidate()
 
     @staticmethod
     def _sort_rank(is_pinned_file, is_dir):
-        if is_pinned_file:
-            return 0
         if is_dir:
+            return 0
+        if is_pinned_file:
             return 1
         return 2
 
