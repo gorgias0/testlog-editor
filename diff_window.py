@@ -1,5 +1,3 @@
-import json
-
 from PySide6.QtCore import Qt, QTimer, QRect, QSize
 from PySide6.QtGui import QColor, QTextCursor, QTextFormat, QPainter
 from PySide6.QtWidgets import (
@@ -7,16 +5,20 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QMessageBox,
     QSplitter,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from diff_utils import collect_change_blocks, compute_line_diff_states
+from html_tools import pretty_print_html
+from json_tools import format_json_best_effort
 
 
 class LineNumberArea(QWidget):
@@ -135,12 +137,20 @@ class DiffWindow(QDialog):
         self.next_change_button = QPushButton(self._tr("Next"))
         self.next_change_button.clicked.connect(self.go_to_next_change)
         top_row.addWidget(self.next_change_button)
-        self.format_json_a_button = QPushButton(self._tr("Format JSON A"))
-        self.format_json_a_button.clicked.connect(lambda: self.format_json_pane("a"))
-        top_row.addWidget(self.format_json_a_button)
-        self.format_json_b_button = QPushButton(self._tr("Format JSON B"))
-        self.format_json_b_button.clicked.connect(lambda: self.format_json_pane("b"))
-        top_row.addWidget(self.format_json_b_button)
+        self.transform_button = QToolButton(self)
+        self.transform_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.transform_menu = QMenu(self.transform_button)
+        self.format_json_a_action = self.transform_menu.addAction("")
+        self.format_json_a_action.triggered.connect(lambda: self.format_json_pane("a"))
+        self.format_json_b_action = self.transform_menu.addAction("")
+        self.format_json_b_action.triggered.connect(lambda: self.format_json_pane("b"))
+        self.transform_menu.addSeparator()
+        self.format_html_a_action = self.transform_menu.addAction("")
+        self.format_html_a_action.triggered.connect(lambda: self.format_html_pane("a"))
+        self.format_html_b_action = self.transform_menu.addAction("")
+        self.format_html_b_action.triggered.connect(lambda: self.format_html_pane("b"))
+        self.transform_button.setMenu(self.transform_menu)
+        top_row.addWidget(self.transform_button)
         self.change_counter_label = QLabel("")
         top_row.addWidget(self.change_counter_label)
         self.ignore_whitespace_checkbox = QCheckBox(self._tr("Ignore Whitespace"))
@@ -184,6 +194,7 @@ class DiffWindow(QDialog):
         self.pane_b.verticalScrollBar().valueChanged.connect(self.sync_scroll_b)
 
         self.apply_theme(palette)
+        self.retranslate_ui()
         self.update_diff()
 
     def apply_theme(self, palette):
@@ -197,13 +208,13 @@ class DiffWindow(QDialog):
                 color: {palette["muted_text"]};
                 font-weight: 600;
             }}
-            QPushButton {{
+            QPushButton, QToolButton {{
                 background: {palette["chrome_bg"]};
                 color: {palette["text"]};
                 border: 1px solid {palette["panel_border"]};
                 padding: 4px 10px;
             }}
-            QPushButton:hover {{
+            QPushButton:hover, QToolButton:hover {{
                 background: {palette["chrome_hover"]};
             }}
             QPlainTextEdit {{
@@ -223,6 +234,23 @@ class DiffWindow(QDialog):
             editor.line_number_area.update()
             editor.viewport().update()
 
+    def retranslate_ui(self):
+        self.setWindowTitle(self._tr("Diff"))
+        self.previous_change_button.setText(self._tr("Previous"))
+        self.next_change_button.setText(self._tr("Next"))
+        self.transform_button.setText(self._tr("Transform"))
+        self.transform_button.setToolTip(self._tr("Transform"))
+        self.format_json_a_action.setText(self._tr("Format JSON A"))
+        self.format_json_b_action.setText(self._tr("Format JSON B"))
+        self.format_html_a_action.setText(self._tr("Format HTML A"))
+        self.format_html_b_action.setText(self._tr("Format HTML B"))
+        self.ignore_whitespace_checkbox.setText(self._tr("Ignore Whitespace"))
+        self.ignore_blank_lines_checkbox.setText(self._tr("Ignore Blank Lines"))
+        self.clear_button.setText(self._tr("Clear"))
+        self.label_a.setText(self._tr("Text A"))
+        self.label_b.setText(self._tr("Text B"))
+        self._update_change_counter()
+
     def apply_editor_font(self, font):
         self.pane_a.setFont(font)
         self.pane_b.setFont(font)
@@ -234,19 +262,21 @@ class DiffWindow(QDialog):
 
     def format_json_pane(self, pane_name):
         editor = self.pane_a if pane_name == "a" else self.pane_b
-        text = editor.toPlainText()
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as error:
+        formatted, valid, error = format_json_best_effort(editor.toPlainText())
+        editor.setPlainText(formatted)
+        if not valid:
             QMessageBox.warning(
                 self,
                 self._tr("Format JSON"),
-                self._tr("Invalid JSON: {error}").format(error=str(error)),
+                self._tr("Best-effort JSON formatting applied: {error}").format(error=error),
             )
-            editor.setFocus()
-            return
 
-        editor.setPlainText(json.dumps(parsed, indent=2, ensure_ascii=False))
+        editor.setFocus()
+        self.update_diff()
+
+    def format_html_pane(self, pane_name):
+        editor = self.pane_a if pane_name == "a" else self.pane_b
+        editor.setPlainText(pretty_print_html(editor.toPlainText()))
         editor.setFocus()
         self.update_diff()
 

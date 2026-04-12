@@ -43,6 +43,7 @@ from icons import (
     multi_icon_from_svg,
 )
 from diff_window import DiffWindow
+from json_tools import format_json_best_effort
 from text_tool_dialog import TextToolDialog
 from testlog_utils import (
     build_fulltext_search_results,
@@ -2701,17 +2702,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "text_tool_dialog") and self.text_tool_dialog is not None:
             self.text_tool_dialog.retranslate_ui()
         if self.diff_window is not None:
-            self.diff_window.setWindowTitle(self._tr("Diff"))
-            self.diff_window.previous_change_button.setText(self._tr("Previous"))
-            self.diff_window.next_change_button.setText(self._tr("Next"))
-            self.diff_window.format_json_a_button.setText(self._tr("Format JSON A"))
-            self.diff_window.format_json_b_button.setText(self._tr("Format JSON B"))
-            self.diff_window.ignore_whitespace_checkbox.setText(self._tr("Ignore Whitespace"))
-            self.diff_window.ignore_blank_lines_checkbox.setText(self._tr("Ignore Blank Lines"))
-            self.diff_window.clear_button.setText(self._tr("Clear"))
-            self.diff_window.label_a.setText(self._tr("Text A"))
-            self.diff_window.label_b.setText(self._tr("Text B"))
-            self.diff_window._update_change_counter()
+            self.diff_window.retranslate_ui()
 
     def _setup_ui(self):
         # Yttre splitter: sidebar | höger
@@ -3460,19 +3451,16 @@ class MainWindow(QMainWindow):
 
     def _transform_editor_format_json(self):
         text, replace_selection = self._editor_selected_or_all_text()
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as error:
-            QMessageBox.warning(
-                self,
-                self._tr("Transform"),
-                self._tr("Invalid JSON: {error}").format(error=str(error)),
-            )
-            return
+        formatted, valid, error = format_json_best_effort(text)
         self._replace_editor_selected_or_all_text(
-            json.dumps(parsed, indent=2, ensure_ascii=False),
+            formatted,
             replace_selection,
         )
+        if not valid:
+            self.statusBar().showMessage(
+                self._tr("Best-effort JSON formatting applied: {error}").format(error=error),
+                5000,
+            )
 
     def _transform_editor_guess_markdown(self):
         text, replace_selection = self._editor_selected_or_all_text()

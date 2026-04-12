@@ -1,4 +1,5 @@
 import text_tool_dialog
+from html_tools import pretty_print_html
 from text_tool_dialog import TextToolDialog
 
 
@@ -52,3 +53,22 @@ def test_generate_lorem_text_ends_last_paragraph_with_end_without_wrappers():
     assert not dialog.text_area.value.startswith("START")
     assert not dialog.text_area.value.endswith("\n\nEND")
     assert dialog.text_area.value.endswith(".\n###")
+
+
+def test_pretty_print_html_expands_nested_markup():
+    html = "<section><h1>Title</h1><p>Hello <strong>there</strong></p><br></section>"
+
+    assert pretty_print_html(html) == (
+        "<section>\n"
+        "  <h1>\n"
+        "    Title\n"
+        "  </h1>\n"
+        "  <p>\n"
+        "    Hello\n"
+        "    <strong>\n"
+        "      there\n"
+        "    </strong>\n"
+        "  </p>\n"
+        "  <br>\n"
+        "</section>"
+    )

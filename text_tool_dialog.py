@@ -1,5 +1,4 @@
 import base64
-import json
 import random
 import re
 import uuid
@@ -27,6 +26,9 @@ from PySide6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
 )
+
+from html_tools import pretty_print_html
+from json_tools import format_json_best_effort
 
 TESTDATA_PROFILES = {
     "se": {
@@ -292,6 +294,8 @@ class TextToolDialog(QDialog):
         self.url_decode_action.triggered.connect(self._transform_url_decode)
         self.format_json_action = QAction(self)
         self.format_json_action.triggered.connect(self._transform_format_json)
+        self.format_html_action = QAction(self)
+        self.format_html_action.triggered.connect(self._transform_format_html)
         self.generate_lorem_button = QToolButton(self)
         self.generate_lorem_button.clicked.connect(lambda: self._generate_lorem_text(5))
         self.generate_lorem_menu = QMenu(self.generate_lorem_button)
@@ -335,6 +339,7 @@ class TextToolDialog(QDialog):
         self.transform_menu.addAction(self.url_decode_action)
         self.transform_menu.addSeparator()
         self.transform_menu.addAction(self.format_json_action)
+        self.transform_menu.addAction(self.format_html_action)
 
         self.toolbar.addWidget(self.generate_lorem_button)
         self.toolbar.addAction(self.counter_string_action)
@@ -391,6 +396,7 @@ class TextToolDialog(QDialog):
         self.url_encode_action.setText(self._tr("To URL"))
         self.url_decode_action.setText(self._tr("From URL"))
         self.format_json_action.setText(self._tr("Format JSON"))
+        self.format_html_action.setText(self._tr("Format HTML"))
         self.generate_lorem_button.setText(self._tr("Generate Lorem"))
         self.generate_lorem_button.setToolTip(self._tr("Generate Lorem"))
         self.counter_string_action.setText(self._tr("Counter String"))
@@ -619,17 +625,16 @@ class TextToolDialog(QDialog):
         self.text_area.setPlainText(url_unquote(self.text_area.toPlainText()))
 
     def _transform_format_json(self):
-        text = self.text_area.toPlainText()
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as error:
-            QMessageBox.warning(
-                self,
-                self._tr("Transform"),
-                self._tr("Invalid JSON: {error}").format(error=str(error)),
+        formatted, valid, error = format_json_best_effort(self.text_area.toPlainText())
+        self.text_area.setPlainText(formatted)
+        if not valid:
+            self.status_bar.showMessage(
+                self._tr("Best-effort JSON formatting applied: {error}").format(error=error),
+                5000,
             )
-            return
-        self.text_area.setPlainText(json.dumps(parsed, indent=2, ensure_ascii=False))
+
+    def _transform_format_html(self):
+        self.text_area.setPlainText(pretty_print_html(self.text_area.toPlainText()))
 
     def _generate_personnummer(self):
         return f"20999999-{random.randint(9000, 9999):04d}"

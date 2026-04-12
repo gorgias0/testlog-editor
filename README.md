@@ -5,7 +5,7 @@ A local-first desktop Markdown editor for `.testlog` files, built with PySide6.
 ## Highlights
 
 - Workspace-first flow with a searchable file tree, pinned files, and last-workspace restore
-- Text tools for exploratory testing like; generate test data, lorem ipsum, count chars, convert to Base64 etc.
+- Text tools for exploratory testing like; generate test data, lorem ipsum, count chars, pretty-print JSON/HTML, convert to Base64 etc.
 - Split editor and live preview with clickable task list checkboxes
 - Robust autosave for saved files, plus save/discard prompts when leaving untitled changes behind
 - Paste screenshots and images directly into a note as embedded markdown assets
