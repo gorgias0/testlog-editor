@@ -131,6 +131,15 @@ class Editor(QTextEdit):
     def should_sync_preview_scroll(self):
         return self._preview_scroll_sync_active
 
+    def _get_leading_whitespace(self, line: str) -> str:
+        match = re.match(r'^(\s+)', line)
+        return match.group(1) if match else ""
+
+    def _set_text_cursor_visible(self, cursor):
+        self.setTextCursor(cursor)
+        self.ensureCursorVisible()
+        QTimer.singleShot(0, self.ensureCursorVisible)
+
     def insertFromMimeData(self, source):
         if source.hasImage():
             image = QImage(source.imageData())
@@ -172,7 +181,10 @@ class Editor(QTextEdit):
         elif event.key() == Qt.Key.Key_Tab and event.modifiers() == Qt.KeyboardModifier.NoModifier:
             self._handle_tab()
             return
-        elif event.key() == Qt.Key.Key_Tab and event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
+        elif (
+            event.key() == Qt.Key.Key_Backtab
+            or event.key() == Qt.Key.Key_Tab and event.modifiers() == Qt.KeyboardModifier.ShiftModifier
+        ):
             self._handle_shift_tab()
             return
         elif event.key() == Qt.Key.Key_Up and event.modifiers() == Qt.KeyboardModifier.AltModifier:
@@ -288,8 +300,20 @@ class Editor(QTextEdit):
         doc = self.document()
         is_last_line = block.blockNumber() == doc.blockCount() - 1
         position_in_block = cursor.positionInBlock()
+        indent = self._get_leading_whitespace(line_text)
 
-        checkbox_match = re.match(r'^(-\s+\[( |x|X)\]\s?)(.*)$', line_text)
+        if indent and not line_text.strip():
+            cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+            cursor.insertText("")
+            self._set_text_cursor_visible(cursor)
+            from PySide6.QtGui import QKeyEvent
+            event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
+            super().keyPressEvent(event)
+            return
+
+        list_text = line_text[len(indent):]
+
+        checkbox_match = re.match(r'^(-\s+\[( |x|X)\]\s?)(.*)$', list_text)
         if checkbox_match:
             prefix = checkbox_match.group(1)
             content = checkbox_match.group(3)
@@ -297,60 +321,74 @@ class Editor(QTextEdit):
                 cursor.movePosition(cursor.MoveOperation.StartOfLine)
                 cursor.movePosition(cursor.MoveOperation.EndOfLine, cursor.MoveMode.KeepAnchor)
                 cursor.removeSelectedText()
-                self.setTextCursor(cursor)
-                if not is_last_line:
+                if indent:
+                    cursor.insertText(indent)
+                self._set_text_cursor_visible(cursor)
+                if not indent and not is_last_line:
                     cursor.insertText('\n')
+                    self._set_text_cursor_visible(cursor)
             elif position_in_block < len(line_text):
-                self._split_list_item(prefix, content, position_in_block, '- [ ] ')
+                self._split_list_item(f'{indent}{prefix}', content, position_in_block, f'{indent}- [ ] ')
             else:
                 cursor.movePosition(cursor.MoveOperation.EndOfLine)
-                self.setTextCursor(cursor)
-                cursor.insertText('\n- [ ] ')
+                cursor.insertText(f'\n{indent}- [ ] ')
+                self._set_text_cursor_visible(cursor)
             return
 
         # Check for bullet list
-        bullet_match = re.match(r'^(-\s+)(.*)$', line_text)
+        bullet_match = re.match(r'^(-\s+)(.*)$', list_text)
         if bullet_match:
             prefix = bullet_match.group(1)
             content = bullet_match.group(2)
-            if line_text.strip() == '-':
+            if not content.strip():
                 # Empty list item, exit list mode
                 cursor.movePosition(cursor.MoveOperation.StartOfLine)
                 cursor.movePosition(cursor.MoveOperation.EndOfLine, cursor.MoveMode.KeepAnchor)
                 cursor.removeSelectedText()
-                self.setTextCursor(cursor)
-                if not is_last_line:
+                if indent:
+                    cursor.insertText(indent)
+                self._set_text_cursor_visible(cursor)
+                if not indent and not is_last_line:
                     cursor.insertText('\n')
+                    self._set_text_cursor_visible(cursor)
             elif position_in_block < len(line_text):
-                self._split_list_item(prefix, content, position_in_block, prefix)
+                self._split_list_item(f'{indent}{prefix}', content, position_in_block, f'{indent}{prefix}')
             else:
                 # Continue list
                 cursor.movePosition(cursor.MoveOperation.EndOfLine)
-                self.setTextCursor(cursor)
-                cursor.insertText('\n- ')
+                cursor.insertText(f'\n{indent}{prefix}')
+                self._set_text_cursor_visible(cursor)
             return
 
         # Check for numbered list
-        match = re.match(r'^((\d+)\.\s+)(.*)$', line_text)
+        match = re.match(r'^((\d+)\.\s+)(.*)$', list_text)
         if match:
             prefix = match.group(1)
             num = int(match.group(2))
             content = match.group(3)
-            if line_text.strip() == f'{num}.':
+            if not content.strip():
                 # Empty numbered item, exit list mode
                 cursor.movePosition(cursor.MoveOperation.StartOfLine)
                 cursor.movePosition(cursor.MoveOperation.EndOfLine, cursor.MoveMode.KeepAnchor)
                 cursor.removeSelectedText()
-                self.setTextCursor(cursor)
-                if not is_last_line:
+                if indent:
+                    cursor.insertText(indent)
+                self._set_text_cursor_visible(cursor)
+                if not indent and not is_last_line:
                     cursor.insertText('\n')
+                    self._set_text_cursor_visible(cursor)
             elif position_in_block < len(line_text):
-                self._split_list_item(prefix, content, position_in_block, f'{num + 1}. ')
+                self._split_list_item(f'{indent}{prefix}', content, position_in_block, f'{indent}{num + 1}. ')
             else:
                 # Continue numbered list
                 cursor.movePosition(cursor.MoveOperation.EndOfLine)
-                self.setTextCursor(cursor)
-                cursor.insertText(f'\n{num + 1}. ')
+                cursor.insertText(f'\n{indent}{num + 1}. ')
+                self._set_text_cursor_visible(cursor)
+            return
+
+        if indent:
+            cursor.insertText(f'\n{indent}')
+            self._set_text_cursor_visible(cursor)
             return
 
         # Default behavior - use super with a synthetic Return key event
@@ -370,39 +408,169 @@ class Editor(QTextEdit):
         cursor.removeSelectedText()
         cursor.insertText(f"{current_prefix}{before_content}\n{next_prefix}{after_content}")
         cursor.setPosition(cursor.position() - len(after_content))
-        self.setTextCursor(cursor)
+        self._set_text_cursor_visible(cursor)
         cursor.endEditBlock()
 
     def _handle_tab(self):
         cursor = self.textCursor()
+        if cursor.hasSelection():
+            self._indent_selected_lines(cursor)
+            return
+
         block = cursor.block()
         line_text = block.text()
 
-        if line_text.startswith('- '):
+        if self._is_list_line(line_text):
             # Indent list item
-            cursor.movePosition(cursor.MoveOperation.StartOfLine)
-            self.setTextCursor(cursor)
-            cursor.insertText('  ')
+            indent_size = len(self._indent_prefix_for_line(line_text))
+            cursor.beginEditBlock()
+            self._indent_block(block)
+            cursor.endEditBlock()
+            cursor.setPosition(block.position() + indent_size)
+            self._set_text_cursor_visible(cursor)
         else:
             # Default tab
-            cursor.insertText('    ')
+            cursor.insertText(self._indent_prefix_for_line(line_text))
 
     def _handle_shift_tab(self):
         cursor = self.textCursor()
+        if cursor.hasSelection():
+            self._unindent_selected_lines(cursor)
+            return
+
         block = cursor.block()
         line_text = block.text()
 
-        # Remove up to 2 spaces from start of line
+        # Remove one indentation unit from the start of the line
         cursor.movePosition(cursor.MoveOperation.StartOfLine)
-        self.setTextCursor(cursor)
-        spaces_to_remove = 0
-        if line_text.startswith('  '):
-            spaces_to_remove = 2
-        elif line_text.startswith(' '):
-            spaces_to_remove = 1
+        self._set_text_cursor_visible(cursor)
+        chars_to_remove = self._unindent_char_count(line_text)
 
-        for _ in range(spaces_to_remove):
+        for _ in range(chars_to_remove):
             cursor.deleteChar()
+
+    def _selected_block_range(self, cursor):
+        selection_start = cursor.selectionStart()
+        selection_end = cursor.selectionEnd()
+        start_block = self.document().findBlock(selection_start)
+        end_block = self.document().findBlock(selection_end)
+        if (
+            selection_end > selection_start
+            and selection_end == end_block.position()
+            and end_block.previous().isValid()
+        ):
+            end_block = end_block.previous()
+        return start_block, end_block, selection_start, selection_end
+
+    def _indent_prefix_for_line(self, line_text):
+        ordered_match = self._ordered_list_match(line_text)
+        if ordered_match:
+            return ' ' * (len(ordered_match.group(2)) + 2)
+
+        bullet_match = re.match(r'^\s*([-+*])(\s+)', line_text)
+        return ' ' * len(''.join(bullet_match.groups())) if bullet_match else '    '
+
+    def _is_list_line(self, line_text):
+        return bool(re.match(r'^\s*[-+*]\s+', line_text) or self._ordered_list_match(line_text))
+
+    def _ordered_list_match(self, line_text):
+        return re.match(r'^(\s*)(\d+)(\.)(\s*)', line_text)
+
+    def _unindent_char_count(self, line_text):
+        if line_text.startswith('\t'):
+            return 1
+        ordered_match = re.match(r'^( +)\d+\.\s+', line_text)
+        if ordered_match:
+            indent_size = len(ordered_match.group(1))
+            return 3 if indent_size % 3 == 0 else min(2, indent_size)
+        if re.match(r'^ {2,}(?:[-+*]|\d+\.)\s+', line_text):
+            return 2
+        if line_text.startswith('    '):
+            return 4
+        if line_text.startswith('  '):
+            return 2
+        if line_text.startswith(' '):
+            return 1
+        return 0
+
+    def _indent_selected_lines(self, cursor):
+        start_block, end_block, selection_start, selection_end = self._selected_block_range(cursor)
+        block = start_block
+        inserted_count = 0
+        ordered_counter = None
+        ordered_indent = None
+
+        cursor.beginEditBlock()
+        while block.isValid() and block.blockNumber() <= end_block.blockNumber():
+            ordered_match = self._ordered_list_match(block.text())
+            ordered_number = None
+            if ordered_match:
+                current_indent = ordered_match.group(1)
+                if ordered_counter is None or current_indent != ordered_indent:
+                    ordered_counter = 1
+                    ordered_indent = current_indent
+                else:
+                    ordered_counter += 1
+                ordered_number = ordered_counter
+            else:
+                ordered_counter = None
+                ordered_indent = None
+
+            inserted_count += self._indent_block(block, ordered_number=ordered_number)
+            block = block.next()
+        cursor.endEditBlock()
+
+        cursor.setPosition(selection_start)
+        cursor.setPosition(selection_end + inserted_count, QTextCursor.MoveMode.KeepAnchor)
+        self._set_text_cursor_visible(cursor)
+
+    def _indent_block(self, block, ordered_number=None):
+        line_text = block.text()
+        prefix = self._indent_prefix_for_line(line_text)
+        edit_cursor = QTextCursor(block)
+        edit_cursor.insertText(prefix)
+        change_count = len(prefix)
+
+        numbered_match = self._ordered_list_match(line_text)
+        if numbered_match:
+            next_number = ordered_number or 1
+            next_marker = f'{next_number}. '
+            marker_length = (
+                len(numbered_match.group(2))
+                + len(numbered_match.group(3))
+                + len(numbered_match.group(4))
+            )
+            number_start = block.position() + len(prefix) + len(numbered_match.group(1))
+            edit_cursor.setPosition(number_start)
+            edit_cursor.setPosition(
+                number_start + marker_length,
+                QTextCursor.MoveMode.KeepAnchor,
+            )
+            edit_cursor.insertText(next_marker)
+            change_count += len(next_marker) - marker_length
+
+        return change_count
+
+    def _unindent_selected_lines(self, cursor):
+        start_block, end_block, selection_start, selection_end = self._selected_block_range(cursor)
+        block = start_block
+        removed_count = 0
+
+        cursor.beginEditBlock()
+        while block.isValid() and block.blockNumber() <= end_block.blockNumber():
+            next_block = block.next()
+            chars_to_remove = self._unindent_char_count(block.text())
+            if chars_to_remove:
+                edit_cursor = QTextCursor(block)
+                for _ in range(chars_to_remove):
+                    edit_cursor.deleteChar()
+                removed_count += chars_to_remove
+            block = next_block
+        cursor.endEditBlock()
+
+        cursor.setPosition(selection_start)
+        cursor.setPosition(max(selection_start, selection_end - removed_count), QTextCursor.MoveMode.KeepAnchor)
+        self._set_text_cursor_visible(cursor)
 
     def format_bold(self):
         cursor = self.textCursor()
