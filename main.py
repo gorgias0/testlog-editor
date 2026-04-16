@@ -2535,6 +2535,12 @@ class MainWindow(QMainWindow):
         self.save_as_action.setShortcut("Ctrl+Shift+S")
         self.save_as_action.triggered.connect(self.save_file_as)
 
+        self.export_md_action = QAction(self)
+        self.export_md_action.triggered.connect(lambda: self.export_text_copy("md"))
+
+        self.export_txt_action = QAction(self)
+        self.export_txt_action.triggered.connect(lambda: self.export_text_copy("txt"))
+
         self.export_pdf_action = QAction(self)
         self.export_pdf_action.triggered.connect(self.export_pdf)
         self.quit_action = QAction(self)
@@ -2547,6 +2553,9 @@ class MainWindow(QMainWindow):
         self.file_menu.addSeparator()
         self.file_menu.addAction(self.save_action)
         self.file_menu.addAction(self.save_as_action)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.export_md_action)
+        self.file_menu.addAction(self.export_txt_action)
         self.file_menu.addAction(self.export_pdf_action)
         self.file_menu.addSeparator()
         self.file_menu.addAction(self.quit_action)
@@ -2768,6 +2777,8 @@ class MainWindow(QMainWindow):
         self.open_workspace_action.setText(self._tr("Open Workspace..."))
         self.save_action.setText(self._tr("Save"))
         self.save_as_action.setText(self._tr("Save As..."))
+        self.export_md_action.setText(self._tr("Export as Markdown..."))
+        self.export_txt_action.setText(self._tr("Export as Text..."))
         self.export_pdf_action.setText(self._tr("Export as PDF..."))
         self.quit_action.setText(self._tr("Quit"))
 
@@ -4548,6 +4559,38 @@ class MainWindow(QMainWindow):
     def _suggest_filename_from_heading(self):
         """Extract first heading from editor to use as filename."""
         return suggest_filename_from_heading(self.editor.toPlainText())
+
+    def _default_export_path(self, extension):
+        if self.current_file:
+            filename = Path(self.current_file).with_suffix(f".{extension}").name
+        else:
+            filename = self._suggest_filename_from_heading() + f".{extension}"
+        return os.path.join(self.workspace_dir or "", filename)
+
+    def export_text_copy(self, extension):
+        extension = extension.lower().lstrip(".")
+        if extension == "md":
+            title = self._tr("Export as Markdown")
+            file_filter = self._tr("Markdown Files (*.md)")
+            success_message = self._tr("Markdown exported")
+        elif extension == "txt":
+            title = self._tr("Export as Text")
+            file_filter = self._tr("Text Files (*.txt)")
+            success_message = self._tr("Text exported")
+        else:
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, title, self._default_export_path(extension), file_filter
+        )
+        if not path:
+            return
+        if not path.lower().endswith(f".{extension}"):
+            path += f".{extension}"
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(strip_testlog_front_matter(self.editor.toPlainText()))
+        self.statusBar().showMessage(success_message, 3000)
 
     def _embed_images_as_base64(self, html):
         def replace_src(match):

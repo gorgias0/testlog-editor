@@ -3,6 +3,7 @@ from PySide6.QtGui import QColor, QTextCursor, QTextFormat, QPainter
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -151,6 +152,17 @@ class DiffWindow(QDialog):
         self.format_html_b_action.triggered.connect(lambda: self.format_html_pane("b"))
         self.transform_button.setMenu(self.transform_menu)
         top_row.addWidget(self.transform_button)
+        self.save_button = QToolButton(self)
+        self.save_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.save_menu = QMenu(self.save_button)
+        self.save_a_action = self.save_menu.addAction("")
+        self.save_a_action.triggered.connect(lambda: self.save_pane_as("a"))
+        self.save_b_action = self.save_menu.addAction("")
+        self.save_b_action.triggered.connect(lambda: self.save_pane_as("b"))
+        self.save_both_action = self.save_menu.addAction("")
+        self.save_both_action.triggered.connect(self.save_both_as)
+        self.save_button.setMenu(self.save_menu)
+        top_row.addWidget(self.save_button)
         self.change_counter_label = QLabel("")
         top_row.addWidget(self.change_counter_label)
         self.ignore_whitespace_checkbox = QCheckBox(self._tr("Ignore Whitespace"))
@@ -240,10 +252,15 @@ class DiffWindow(QDialog):
         self.next_change_button.setText(self._tr("Next"))
         self.transform_button.setText(self._tr("Transform"))
         self.transform_button.setToolTip(self._tr("Transform"))
+        self.save_button.setText(self._tr("Save"))
+        self.save_button.setToolTip(self._tr("Save"))
         self.format_json_a_action.setText(self._tr("Format JSON A"))
         self.format_json_b_action.setText(self._tr("Format JSON B"))
         self.format_html_a_action.setText(self._tr("Format HTML A"))
         self.format_html_b_action.setText(self._tr("Format HTML B"))
+        self.save_a_action.setText(self._tr("Save Text A As..."))
+        self.save_b_action.setText(self._tr("Save Text B As..."))
+        self.save_both_action.setText(self._tr("Save Both As..."))
         self.ignore_whitespace_checkbox.setText(self._tr("Ignore Whitespace"))
         self.ignore_blank_lines_checkbox.setText(self._tr("Ignore Blank Lines"))
         self.clear_button.setText(self._tr("Clear"))
@@ -279,6 +296,77 @@ class DiffWindow(QDialog):
         editor.setPlainText(pretty_print_html(editor.toPlainText()))
         editor.setFocus()
         self.update_diff()
+
+    def _text_save_filters(self):
+        return ";;".join([
+            self._tr("Text Files (*.txt)"),
+            self._tr("JSON Files (*.json)"),
+            self._tr("HTML Files (*.html *.htm)"),
+            self._tr("Markdown Files (*.md)"),
+            self._tr("XML Files (*.xml)"),
+            self._tr("CSV Files (*.csv)"),
+            self._tr("All Files (*)"),
+        ])
+
+    def _combined_save_filters(self):
+        return ";;".join([
+            self._tr("Text Files (*.txt)"),
+            self._tr("Markdown Files (*.md)"),
+            self._tr("All Files (*)"),
+        ])
+
+    def _extensions_for_save_filter(self, selected_filter):
+        filter_extensions = {
+            self._tr("JSON Files (*.json)"): (".json",),
+            self._tr("HTML Files (*.html *.htm)"): (".html", ".htm"),
+            self._tr("Markdown Files (*.md)"): (".md",),
+            self._tr("XML Files (*.xml)"): (".xml",),
+            self._tr("CSV Files (*.csv)"): (".csv",),
+            self._tr("Text Files (*.txt)"): (".txt",),
+        }
+        return filter_extensions.get(selected_filter, ())
+
+    def _save_text_to_path(self, path, selected_filter, text):
+        extensions = self._extensions_for_save_filter(selected_filter)
+        if extensions and not path.lower().endswith(extensions):
+            path += extensions[0]
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+
+    def save_pane_as(self, pane_name):
+        label = "A" if pane_name == "a" else "B"
+        editor = self.pane_a if pane_name == "a" else self.pane_b
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            self._tr("Save Text {label} As").format(label=label),
+            f"diff-{label.lower()}.txt",
+            self._text_save_filters(),
+        )
+        if not path:
+            return
+
+        self._save_text_to_path(path, selected_filter, editor.toPlainText())
+
+    def save_both_as(self):
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            self._tr("Save Both As"),
+            "diff.txt",
+            self._combined_save_filters(),
+        )
+        if not path:
+            return
+
+        text = "\n".join([
+            f"--- {self._tr('Text A')} ---",
+            self.pane_a.toPlainText(),
+            "",
+            f"--- {self._tr('Text B')} ---",
+            self.pane_b.toPlainText(),
+        ])
+        self._save_text_to_path(path, selected_filter, text)
 
     def _schedule_diff_update(self):
         self.diff_timer.start()

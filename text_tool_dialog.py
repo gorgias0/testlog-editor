@@ -2,6 +2,7 @@ import base64
 import random
 import re
 import uuid
+from datetime import date, timedelta
 from urllib.parse import quote as url_quote, unquote as url_unquote
 
 from faker import Faker
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -281,6 +283,8 @@ class TextToolDialog(QDialog):
         self.text_area.setFont(text_area_font)
         self.status_bar = QStatusBar()
         self.file_menu = QMenu(self)
+        self.save_as_action = QAction(self)
+        self.save_as_action.triggered.connect(self._save_text_as)
         self.close_action = QAction(self)
         self.close_action.triggered.connect(self.close)
         self.transform_menu = QMenu(self)
@@ -330,6 +334,8 @@ class TextToolDialog(QDialog):
         self.clear_action.triggered.connect(self.text_area.clear)
 
         self.menu_bar.addMenu(self.file_menu)
+        self.file_menu.addAction(self.save_as_action)
+        self.file_menu.addSeparator()
         self.file_menu.addAction(self.close_action)
         self.menu_bar.addMenu(self.transform_menu)
         self.transform_menu.addAction(self.base64_encode_action)
@@ -389,6 +395,7 @@ class TextToolDialog(QDialog):
         self.setWindowTitle(self._tr("Text Tool"))
         self.text_area.setPlaceholderText(self._tr("Paste text here..."))
         self.file_menu.setTitle(self._with_mnemonic(self._tr("File")))
+        self.save_as_action.setText(self._tr("Save As..."))
         self.close_action.setText(self._tr("Close"))
         self.transform_menu.setTitle(self._with_mnemonic(self._tr("Transform")))
         self.base64_encode_action.setText(self._tr("To Base64"))
@@ -636,8 +643,68 @@ class TextToolDialog(QDialog):
     def _transform_format_html(self):
         self.text_area.setPlainText(pretty_print_html(self.text_area.toPlainText()))
 
+    def _text_save_filters(self):
+        return ";;".join([
+            self._tr("Text Files (*.txt)"),
+            self._tr("JSON Files (*.json)"),
+            self._tr("HTML Files (*.html *.htm)"),
+            self._tr("Markdown Files (*.md)"),
+            self._tr("XML Files (*.xml)"),
+            self._tr("CSV Files (*.csv)"),
+            self._tr("All Files (*)"),
+        ])
+
+    def _extensions_for_save_filter(self, selected_filter):
+        filter_extensions = {
+            self._tr("JSON Files (*.json)"): (".json",),
+            self._tr("HTML Files (*.html *.htm)"): (".html", ".htm"),
+            self._tr("Markdown Files (*.md)"): (".md",),
+            self._tr("XML Files (*.xml)"): (".xml",),
+            self._tr("CSV Files (*.csv)"): (".csv",),
+            self._tr("Text Files (*.txt)"): (".txt",),
+        }
+        return filter_extensions.get(selected_filter, ())
+
+    def _save_text_as(self):
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            self._tr("Save Text As"),
+            "text-tool.txt",
+            self._text_save_filters(),
+        )
+        if not path:
+            return
+
+        extensions = self._extensions_for_save_filter(selected_filter)
+        if extensions and not path.lower().endswith(extensions):
+            path += extensions[0]
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(self.text_area.toPlainText())
+        self.status_bar.showMessage(self._tr("Text saved"), 3000)
+
     def _generate_personnummer(self):
-        return f"20999999-{random.randint(9000, 9999):04d}"
+        birth_date = self._random_swedish_birth_date()
+        individual_number = random.randint(1, 999)
+        base_digits = f"{birth_date:%y%m%d}{individual_number:03d}"
+        checksum = self._luhn_checksum_digit(base_digits)
+        return f"{birth_date:%Y%m%d}-{individual_number:03d}{checksum}"
+
+    def _random_swedish_birth_date(self):
+        start = date(1940, 1, 1)
+        end = date(2006, 12, 31)
+        return start + timedelta(days=random.randint(0, (end - start).days))
+
+    def _luhn_checksum_digit(self, digits):
+        total = 0
+        for index, char in enumerate(digits):
+            value = int(char)
+            if index % 2 == 0:
+                value *= 2
+                if value > 9:
+                    value -= 9
+            total += value
+        return (10 - total % 10) % 10
 
     def _generate_fodselsnummer(self):
         return f"990099{random.randint(90000, 99999):05d}"

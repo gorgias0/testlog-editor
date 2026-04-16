@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import text_tool_dialog
 from html_tools import pretty_print_html
 from text_tool_dialog import TextToolDialog
@@ -72,3 +74,31 @@ def test_pretty_print_html_expands_nested_markup():
         "  <br>\n"
         "</section>"
     )
+
+
+def test_generate_personnummer_uses_real_date_and_valid_checksum():
+    dialog = TextToolDialog.__new__(TextToolDialog)
+
+    for _ in range(100):
+        personnummer = dialog._generate_personnummer()
+        date_part, serial_part = personnummer.split("-")
+
+        assert len(date_part) == 8
+        assert len(serial_part) == 4
+        birth_date = datetime.strptime(date_part, "%Y%m%d").date()
+        assert 1940 <= birth_date.year <= 2006
+
+        luhn_digits = date_part[2:] + serial_part
+        assert _luhn_valid(luhn_digits)
+
+
+def _luhn_valid(digits):
+    total = 0
+    for index, char in enumerate(digits):
+        value = int(char)
+        if index % 2 == 0:
+            value *= 2
+            if value > 9:
+                value -= 9
+        total += value
+    return total % 10 == 0
