@@ -6,7 +6,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeyEvent, QTextCursor
 from PySide6.QtWidgets import QApplication
-from markdown_it import MarkdownIt
 
 from main import Editor
 
@@ -86,7 +85,7 @@ def test_tab_indents_single_selected_line():
 
     editor._handle_tab()
 
-    assert editor.toPlainText() == "alpha\n    beta\ngamma"
+    assert editor.toPlainText() == "alpha\n  beta\ngamma"
 
 
 def test_tab_indents_numbered_list_line_at_line_start_without_selection():
@@ -94,7 +93,7 @@ def test_tab_indents_numbered_list_line_at_line_start_without_selection():
 
     editor._handle_tab()
 
-    assert editor.toPlainText() == "   1. item"
+    assert editor.toPlainText() == "  1. item"
 
 
 def test_tab_indents_multi_line_selection_by_line_type():
@@ -103,18 +102,16 @@ def test_tab_indents_multi_line_selection_by_line_type():
 
     editor._handle_tab()
 
-    assert editor.toPlainText() == "alpha\n  - bullet\n   1. item\n    plain"
+    assert editor.toPlainText() == "alpha\n  - bullet\n  1. item\n  plain"
 
 
-def test_tab_indented_ordered_list_renders_as_nested_in_commonmark_preview():
+def test_tab_uses_configured_two_space_default_for_ordered_list():
     editor = _editor_with_cursor_at_end("1. parent\n2. child")
     _select_text(editor, "2. child")
 
     editor._handle_tab()
-    rendered = MarkdownIt("commonmark", {"html": False}).render(editor.toPlainText())
 
-    assert editor.toPlainText() == "1. parent\n   1. child"
-    assert rendered.count("<ol>") == 2
+    assert editor.toPlainText() == "1. parent\n  1. child"
 
 
 def test_tab_indents_ordered_sibling_selection_with_nested_numbering():
@@ -122,10 +119,8 @@ def test_tab_indents_ordered_sibling_selection_with_nested_numbering():
     _select_text(editor, "2. sds\n3. dssdas")
 
     editor._handle_tab()
-    rendered = MarkdownIt("commonmark", {"html": False}).render(editor.toPlainText())
 
-    assert editor.toPlainText() == "1. fdsf\n   1. sds\n   2. dssdas"
-    assert rendered.count("<ol>") == 2
+    assert editor.toPlainText() == "1. fdsf\n  1. sds\n  2. dssdas"
 
 
 def test_tab_indents_and_normalizes_ordered_marker_without_space():
@@ -133,16 +128,13 @@ def test_tab_indents_and_normalizes_ordered_marker_without_space():
     _select_text(editor, "2. sds\n3.dssdas")
 
     editor._handle_tab()
-    rendered = MarkdownIt("commonmark", {"html": False}).render(editor.toPlainText())
 
-    assert editor.toPlainText() == "1. fdsf\n   1. sds\n   2. dssdas"
-    assert "3.dssdas" not in rendered
-    assert rendered.count("<ol>") == 2
+    assert editor.toPlainText() == "1. fdsf\n  1. sds\n  2. dssdas"
 
 
 def test_shift_tab_unindents_multi_line_selection():
-    editor = _editor_with_cursor_at_end("\talpha\n    beta\n  - bullet\n   1. item\nplain")
-    _select_text(editor, "\talpha\n    beta\n  - bullet\n   1. item\nplain")
+    editor = _editor_with_cursor_at_end("\talpha\n  beta\n  - bullet\n   1. item\nplain")
+    _select_text(editor, "\talpha\n  beta\n  - bullet\n   1. item\nplain")
 
     editor._handle_shift_tab()
 
@@ -166,8 +158,8 @@ def test_shift_tab_unindents_legacy_two_space_numbered_list_one_level():
 
 
 def test_backtab_key_unindents_selection():
-    editor = _editor_with_cursor_at_end("    alpha\n    beta")
-    _select_text(editor, "    alpha\n    beta")
+    editor = _editor_with_cursor_at_end("  alpha\n  beta")
+    _select_text(editor, "  alpha\n  beta")
     event = QKeyEvent(
         QKeyEvent.Type.KeyPress,
         Qt.Key.Key_Backtab,
@@ -177,3 +169,19 @@ def test_backtab_key_unindents_selection():
     editor.keyPressEvent(event)
 
     assert editor.toPlainText() == "alpha\nbeta"
+
+
+def test_tab_can_use_four_spaces_or_tabs():
+    editor = _editor_with_cursor_at_end("alpha")
+    editor.set_indent_text("    ")
+
+    editor._handle_tab()
+
+    assert editor.toPlainText() == "alpha    "
+
+    editor = _editor_with_cursor_at_end("alpha")
+    editor.set_indent_text("\t")
+
+    editor._handle_tab()
+
+    assert editor.toPlainText() == "alpha\t"

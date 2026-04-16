@@ -82,6 +82,14 @@ class ViewMode(Enum):
     SPLIT = "split"
 
 
+DEFAULT_INDENT_STYLE = "spaces2"
+INDENT_STYLE_TEXT = {
+    "spaces2": "  ",
+    "spaces4": "    ",
+    "tabs": "\t",
+}
+
+
 EDITOR_ON_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 52">
   <rect x="0" y="0" width="72" height="52" rx="6" fill="#555"/>
   <text x="36" y="35" text-anchor="middle" font-family="monospace" font-size="18" font-weight="bold" fill="white">&lt;/&gt;</text>
@@ -93,11 +101,18 @@ EDITOR_OFF_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72
 </svg>'''
 
 class Editor(QTextEdit):
-    def __init__(self, on_image_paste, translate=lambda text: text, link_base_path=lambda: None):
+    def __init__(
+        self,
+        on_image_paste,
+        translate=lambda text: text,
+        link_base_path=lambda: None,
+        indent_text=INDENT_STYLE_TEXT[DEFAULT_INDENT_STYLE],
+    ):
         super().__init__()
         self.on_image_paste = on_image_paste
         self._tr = translate
         self._link_base_path = link_base_path
+        self.indent_text = indent_text
         self.setAcceptRichText(False)
         self._preview_scroll_sync_active = False
         self._preview_scroll_sync_timer = QTimer(self)
@@ -134,6 +149,9 @@ class Editor(QTextEdit):
     def _get_leading_whitespace(self, line: str) -> str:
         match = re.match(r'^(\s+)', line)
         return match.group(1) if match else ""
+
+    def set_indent_text(self, indent_text):
+        self.indent_text = indent_text or INDENT_STYLE_TEXT[DEFAULT_INDENT_STYLE]
 
     def _set_text_cursor_visible(self, cursor):
         self.setTextCursor(cursor)
@@ -463,12 +481,7 @@ class Editor(QTextEdit):
         return start_block, end_block, selection_start, selection_end
 
     def _indent_prefix_for_line(self, line_text):
-        ordered_match = self._ordered_list_match(line_text)
-        if ordered_match:
-            return ' ' * (len(ordered_match.group(2)) + 2)
-
-        bullet_match = re.match(r'^\s*([-+*])(\s+)', line_text)
-        return ' ' * len(''.join(bullet_match.groups())) if bullet_match else '    '
+        return self.indent_text
 
     def _is_list_line(self, line_text):
         return bool(re.match(r'^\s*[-+*]\s+', line_text) or self._ordered_list_match(line_text))
@@ -477,18 +490,29 @@ class Editor(QTextEdit):
         return re.match(r'^(\s*)(\d+)(\.)(\s*)', line_text)
 
     def _unindent_char_count(self, line_text):
+        if not line_text:
+            return 0
+        if self.indent_text == '\t' and line_text.startswith('\t'):
+            return 1
         if line_text.startswith('\t'):
             return 1
-        ordered_match = re.match(r'^( +)\d+\.\s+', line_text)
-        if ordered_match:
-            indent_size = len(ordered_match.group(1))
-            return 3 if indent_size % 3 == 0 else min(2, indent_size)
-        if re.match(r'^ {2,}(?:[-+*]|\d+\.)\s+', line_text):
-            return 2
-        if line_text.startswith('    '):
-            return 4
-        if line_text.startswith('  '):
-            return 2
+        space_match = re.match(r'^( +)', line_text)
+        if space_match:
+            leading_spaces = len(space_match.group(1))
+            if re.match(r'^ +(?:[-+*]|\d+\.)\s+', line_text):
+                if self.indent_text == '\t':
+                    return min(4, leading_spaces)
+                indent_width = len(self.indent_text)
+                if indent_width == 2 and leading_spaces % 3 == 0:
+                    return min(3, leading_spaces)
+                return min(indent_width, leading_spaces)
+            if self.indent_text != '\t' and line_text.startswith(self.indent_text):
+                return len(self.indent_text)
+            if leading_spaces >= 4 and len(self.indent_text) <= 4:
+                return min(4, leading_spaces)
+            if leading_spaces >= 2:
+                return min(2, leading_spaces)
+            return 1
         if line_text.startswith(' '):
             return 1
         return 0
@@ -1854,6 +1878,7 @@ class MainWindow(QMainWindow):
         self.current_language = self.settings.value("language", self._default_language(), type=str)
         self.editor_font_size = int(self.settings.value("editor_font_size", 12))
         self.theme_mode = self.settings.value("theme_mode", "light", type=str)
+        self.indent_style = self._load_indent_style()
         self.setWindowTitle("TestLog Editor")
         self.setWindowIcon(multi_icon_from_svg(APP_ICON_SVG))
         self.resize(1400, 800)
@@ -2204,6 +2229,21 @@ class MainWindow(QMainWindow):
         except ValueError:
             return ViewMode.SINGLE
 
+    def _load_indent_style(self):
+        saved_style = self.settings.value("indent_style", DEFAULT_INDENT_STYLE, type=str)
+        return saved_style if saved_style in INDENT_STYLE_TEXT else DEFAULT_INDENT_STYLE
+
+    def _set_indent_style(self, style):
+        if style not in INDENT_STYLE_TEXT:
+            style = DEFAULT_INDENT_STYLE
+        if style == self.indent_style:
+            return
+        self.indent_style = style
+        self.settings.setValue("indent_style", style)
+        if hasattr(self, "editor"):
+            self.editor.set_indent_text(INDENT_STYLE_TEXT[style])
+        self._retranslate_ui()
+
     def _apply_editor_font(self):
         if not hasattr(self, "editor"):
             return
@@ -2509,6 +2549,18 @@ class MainWindow(QMainWindow):
             self.font_size_menu.addAction(action)
             self.font_size_actions[size] = action
 
+        self.indent_style_menu = QMenu(self)
+        self.indent_style_group = QActionGroup(self)
+        self.indent_style_group.setExclusive(True)
+        self.indent_style_actions = {}
+        for style in ("spaces2", "spaces4", "tabs"):
+            action = QAction(self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked=False, s=style: self._set_indent_style(s))
+            self.indent_style_group.addAction(action)
+            self.indent_style_menu.addAction(action)
+            self.indent_style_actions[style] = action
+
         self.light_mode_action = QAction(self)
         self.light_mode_action.setCheckable(True)
         self.light_mode_action.triggered.connect(lambda: self._set_theme_mode("light"))
@@ -2603,6 +2655,7 @@ class MainWindow(QMainWindow):
         self.view_menu.addAction(self.action_split_view)
         self.view_menu.addSeparator()
         self.view_menu.addMenu(self.font_size_menu)
+        self.view_menu.addMenu(self.indent_style_menu)
         self.view_menu.addSeparator()
         self.view_menu.addAction(self.light_mode_action)
         self.view_menu.addAction(self.dark_mode_action)
@@ -2819,11 +2872,17 @@ class MainWindow(QMainWindow):
         self.link_menu_action.setText(self._tr("Insert Link..."))
         self.image_menu_action.setText(self._tr("Insert Image..."))
         self.font_size_menu.setTitle(self._tr("Font Size"))
+        self.indent_style_menu.setTitle(self._tr("Indentation"))
+        self.indent_style_actions["spaces2"].setText(self._tr("2 Spaces"))
+        self.indent_style_actions["spaces4"].setText(self._tr("4 Spaces"))
+        self.indent_style_actions["tabs"].setText(self._tr("Tabs"))
         self.action_split_view.setText(self._tr("Split View"))
         self.light_mode_action.setText(self._tr("Light Mode"))
         self.dark_mode_action.setText(self._tr("Dark Mode"))
         for size, action in self.font_size_actions.items():
             action.setChecked(size == self.editor_font_size)
+        for style, action in self.indent_style_actions.items():
+            action.setChecked(style == self.indent_style)
         self.light_mode_action.setChecked(self.theme_mode == "light")
         self.dark_mode_action.setChecked(self.theme_mode == "dark")
 
@@ -2983,6 +3042,7 @@ class MainWindow(QMainWindow):
             on_image_paste=self.handle_image_paste,
             translate=self._tr,
             link_base_path=self._editor_link_base_path,
+            indent_text=INDENT_STYLE_TEXT[self.indent_style],
         )
         self.editor.setPlaceholderText("Skriv Markdown här...")
         self._apply_editor_font()
