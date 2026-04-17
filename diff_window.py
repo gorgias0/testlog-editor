@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from document_find_bar import DocumentFindBar
 from diff_utils import collect_change_blocks, compute_line_diff_states
 from html_tools import pretty_print_html
 from json_tools import format_json_best_effort
@@ -38,6 +39,7 @@ class DiffTextEdit(QPlainTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._diff_selections = []
+        self._search_selections = []
         self._gutter_bg = QColor("#eef2f7")
         self._gutter_fg = QColor("#7b8794")
         self._current_line_color = QColor("#eef6ff")
@@ -103,10 +105,14 @@ class DiffTextEdit(QPlainTextEdit):
         selection.cursor.clearSelection()
         selection.format.setBackground(self._current_line_color)
         selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
-        self.setExtraSelections([selection] + self._diff_selections)
+        self.setExtraSelections([selection] + self._diff_selections + self._search_selections)
 
     def set_diff_selections(self, selections):
         self._diff_selections = selections
+        self._highlight_current_line()
+
+    def set_search_selections(self, selections):
+        self._search_selections = selections
         self._highlight_current_line()
 
     def set_chrome_colors(self, gutter_bg, gutter_fg, current_line_color):
@@ -188,12 +194,25 @@ class DiffWindow(QDialog):
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.pane_a = DiffTextEdit()
         self.pane_b = DiffTextEdit()
+        self._active_find_editor = self.pane_a
         self.pane_a.setFont(editor_font)
         self.pane_b.setFont(editor_font)
         self.splitter.addWidget(self.pane_a)
         self.splitter.addWidget(self.pane_b)
         self.splitter.setSizes([550, 550])
         root_layout.addWidget(self.splitter, 1)
+
+        self.find_bar = DocumentFindBar(
+            self.pane_a,
+            translate=self._tr,
+            action_parent=self,
+            shortcut_parent=self,
+            editor_provider=self._find_editor,
+            apply_highlights=lambda editor, selections: editor.set_search_selections(selections),
+            clear_highlights=lambda editor: editor.set_search_selections([]),
+            parent=self,
+        )
+        root_layout.addWidget(self.find_bar)
 
         self.diff_timer = QTimer(self)
         self.diff_timer.setSingleShot(True)
@@ -202,12 +221,24 @@ class DiffWindow(QDialog):
 
         self.pane_a.textChanged.connect(self._schedule_diff_update)
         self.pane_b.textChanged.connect(self._schedule_diff_update)
+        self.pane_a.cursorPositionChanged.connect(lambda: self._set_active_find_editor(self.pane_a))
+        self.pane_b.cursorPositionChanged.connect(lambda: self._set_active_find_editor(self.pane_b))
         self.pane_a.verticalScrollBar().valueChanged.connect(self.sync_scroll_a)
         self.pane_b.verticalScrollBar().valueChanged.connect(self.sync_scroll_b)
 
         self.apply_theme(palette)
         self.retranslate_ui()
         self.update_diff()
+
+    def _set_active_find_editor(self, editor):
+        if editor in (self.pane_a, self.pane_b):
+            self._active_find_editor = editor
+
+    def _find_editor(self):
+        focused_widget = self.focusWidget()
+        if focused_widget in (self.pane_a, self.pane_b):
+            self._active_find_editor = focused_widget
+        return self._active_find_editor
 
     def apply_theme(self, palette):
         self.setStyleSheet(
@@ -233,7 +264,8 @@ class DiffWindow(QDialog):
                 background: {palette["panel_bg"]};
                 color: {palette["text"]};
                 border: 1px solid {palette["panel_border"]};
-                selection-background-color: #bfdbfe;
+                selection-background-color: {palette["selection_bg"]};
+                selection-color: {palette["selection_text"]};
             }}
             """
         )
@@ -266,6 +298,7 @@ class DiffWindow(QDialog):
         self.clear_button.setText(self._tr("Clear"))
         self.label_a.setText(self._tr("Text A"))
         self.label_b.setText(self._tr("Text B"))
+        self.find_bar.retranslate_ui()
         self._update_change_counter()
 
     def apply_editor_font(self, font):
@@ -478,8 +511,20 @@ class DiffWindow(QDialog):
         self.update_diff()
 
     def update_diff(self):
-        lines_a = self.pane_a.toPlainText().splitlines(keepends=False)
-        lines_b = self.pane_b.toPlainText().splitlines(keepends=False)
+        text_a = self.pane_a.toPlainText()
+        text_b = self.pane_b.toPlainText()
+        if text_b == "":
+            self._change_blocks = []
+            self._current_change_index = -1
+            self.pane_a.set_diff_selections([])
+            self.pane_b.set_diff_selections([])
+            self.previous_change_button.setEnabled(False)
+            self.next_change_button.setEnabled(False)
+            self._update_change_counter()
+            return
+
+        lines_a = text_a.splitlines(keepends=False)
+        lines_b = text_b.splitlines(keepends=False)
         ignore_whitespace = self._ignore_whitespace_enabled()
         ignore_blank_lines = self._ignore_blank_lines_enabled()
         line_states_a, line_states_b = compute_line_diff_states(

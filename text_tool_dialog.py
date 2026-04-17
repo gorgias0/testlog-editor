@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from document_find_bar import DocumentFindBar
 from html_tools import pretty_print_html
 from json_tools import format_json_best_effort
 
@@ -357,8 +358,17 @@ class TextToolDialog(QDialog):
         self.toolbar.addAction(self.copy_all_action)
         self.toolbar.addAction(self.clear_action)
 
+        self.find_bar = DocumentFindBar(
+            self.text_area,
+            translate=self._tr,
+            action_parent=self,
+            shortcut_parent=self,
+            parent=self,
+        )
+
         layout.addWidget(self.toolbar)
         layout.addWidget(self.text_area)
+        layout.addWidget(self.find_bar)
         layout.addWidget(self.status_bar)
 
         self.text_area.textChanged.connect(self._update_counts)
@@ -394,6 +404,7 @@ class TextToolDialog(QDialog):
     def retranslate_ui(self):
         self.setWindowTitle(self._tr("Text Tool"))
         self.text_area.setPlaceholderText(self._tr("Paste text here..."))
+        self.find_bar.retranslate_ui()
         self.file_menu.setTitle(self._with_mnemonic(self._tr("File")))
         self.save_as_action.setText(self._tr("Save As..."))
         self.close_action.setText(self._tr("Close"))

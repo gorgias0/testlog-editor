@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate, QStyleOptionViewItem,
 )
 from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, Signal, QItemSelectionModel, QSize, QPoint, QFileInfo, QRect
-from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextDocument, QTextCharFormat, QSyntaxHighlighter, QDesktopServices, QPainter
+from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextCharFormat, QSyntaxHighlighter, QDesktopServices, QPainter
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineContextMenuRequest, QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebChannel import QWebChannel
@@ -43,6 +43,7 @@ from icons import (
     multi_icon_from_svg,
 )
 from diff_window import DiffWindow
+from document_find_bar import DocumentFindBar
 from json_tools import format_json_best_effort
 from text_tool_dialog import TextToolDialog
 from testlog_utils import (
@@ -1974,6 +1975,8 @@ class MainWindow(QMainWindow):
                 "scrollbar_track": "#232830",
                 "scrollbar_thumb": "#566170",
                 "scrollbar_thumb_hover": "#6b7788",
+                "selection_bg": "#2563eb",
+                "selection_text": "#ffffff",
             }
         return {
             "window_bg": "#e9edf3",
@@ -1996,6 +1999,8 @@ class MainWindow(QMainWindow):
             "scrollbar_track": "#edf2f7",
             "scrollbar_thumb": "#b8c3d1",
             "scrollbar_thumb_hover": "#9aa9bb",
+            "selection_bg": "#bfdbfe",
+            "selection_text": "#17202b",
         }
 
     def _editor_scrollbar_stylesheet(self, theme_mode=None):
@@ -2326,8 +2331,8 @@ class MainWindow(QMainWindow):
                 color: {palette["text"]};
             }}
             QLineEdit {{
-                selection-background-color: {palette["chrome_hover"]};
-                selection-color: {palette["text"]};
+                selection-background-color: {palette["selection_bg"]};
+                selection-color: {palette["selection_text"]};
                 padding: 4px 6px;
             }}
             QPushButton {{
@@ -2368,15 +2373,22 @@ class MainWindow(QMainWindow):
 
     def _editor_selection_background_color(self):
         palette = self._theme_palette()
-        if self.find_bar.isVisible() and self.find_matches and self.current_find_index >= 0:
+        if hasattr(self, "find_bar") and self.find_bar.has_active_match():
             return "#A57538" if self.theme_mode == "dark" else "#f59e0b"
-        return palette["chrome_hover"]
+        return palette["selection_bg"]
+
+    def _editor_selection_text_color(self):
+        palette = self._theme_palette()
+        if hasattr(self, "find_bar") and self.find_bar.has_active_match():
+            return palette["text"]
+        return palette["selection_text"]
 
     def _apply_editor_stylesheet(self):
         if not hasattr(self, "editor"):
             return
         palette = self._theme_palette()
         selection_bg = self._editor_selection_background_color()
+        selection_text = self._editor_selection_text_color()
         self.editor.setStyleSheet(
             f"""
             QTextEdit {{
@@ -2384,7 +2396,7 @@ class MainWindow(QMainWindow):
                 color: {palette['text']};
                 border: 1px solid {palette['panel_border']};
                 selection-background-color: {selection_bg};
-                selection-color: {palette['text']};
+                selection-color: {selection_text};
             }}
             {self._editor_scrollbar_stylesheet()}
             """
@@ -2930,7 +2942,7 @@ class MainWindow(QMainWindow):
         self.action_sort_created.setText(self._tr("Created"))
         self._update_sort_button()
         self.sidebar_search.setPlaceholderText(self._tr("Search Files..."))
-        self.find_input.setPlaceholderText(self._tr("Search Document..."))
+        self.find_bar.retranslate_ui()
         self.editor.setPlaceholderText(self._tr("Write Markdown here..."))
         self._update_editor_counts()
         self.refresh_pinned()
@@ -3106,7 +3118,6 @@ class MainWindow(QMainWindow):
         self.editor.textChanged.connect(self._update_editor_counts)
         self.editor.textChanged.connect(self._sync_status_from_editor)
         self.editor.cursorPositionChanged.connect(self._update_editor_counts)
-        self.editor.cursorPositionChanged.connect(self._sync_find_current_match_from_cursor)
         self.editor.verticalScrollBar().valueChanged.connect(self._sync_preview_scroll)
 
         self.sidebar_search_timer = QTimer(self)
@@ -3122,67 +3133,18 @@ class MainWindow(QMainWindow):
         editor_layout.setSpacing(4)
         editor_layout.addWidget(self.editor)
 
-        self.find_bar = QWidget()
-        find_layout = QHBoxLayout(self.find_bar)
-        find_layout.setContentsMargins(0, 0, 0, 0)
-        find_layout.setSpacing(6)
-
-        self.find_input = QLineEdit()
-        self.find_input.setPlaceholderText(self._tr("Search Document..."))
-        self.find_prev_button = QPushButton("∧")
-        self.find_next_button = QPushButton("∨")
-        self.find_counter_label = QLabel("")
-        self.find_close_button = QPushButton("✕")
-
-        find_layout.addWidget(self.find_input, 1)
-        find_layout.addWidget(self.find_prev_button)
-        find_layout.addWidget(self.find_next_button)
-        find_layout.addWidget(self.find_counter_label)
-        find_layout.addWidget(self.find_close_button)
-
-        self.find_bar.setVisible(False)
+        self.find_bar = DocumentFindBar(
+            self.editor,
+            translate=self._tr,
+            action_parent=self,
+            shortcut_parent=self.editor_panel,
+            apply_highlights=lambda editor, selections: editor.setExtraSelections(selections),
+            clear_highlights=lambda editor: editor.setExtraSelections([]),
+            on_match_state_changed=self._apply_editor_stylesheet,
+            parent=self.editor_panel,
+        )
+        self.find_input = self.find_bar.find_input
         editor_layout.addWidget(self.find_bar)
-
-        self.find_matches = []
-        self.current_find_index = -1
-        self.pending_find_term = ""
-        self.find_search_generation = 0
-        self.find_search_running = False
-
-        self.find_search_timer = QTimer(self)
-        self.find_search_timer.setSingleShot(True)
-        self.find_search_timer.setInterval(180)
-        self.find_search_timer.timeout.connect(lambda: self._run_pending_find_search())
-
-        self.find_input.textChanged.connect(lambda text: self._schedule_find_results(text))
-        self.find_prev_button.clicked.connect(lambda checked=False: self._find_previous())
-        self.find_next_button.clicked.connect(lambda checked=False: self._find_next())
-        self.find_close_button.clicked.connect(lambda checked=False: self.close_find_bar())
-        self.find_input.installEventFilter(self)
-
-        self.find_action = QAction(self)
-        self.find_action.setShortcut(QKeySequence.Find)
-        self.find_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.find_action.triggered.connect(lambda checked=False: self.open_find_bar())
-        self.addAction(self.find_action)
-
-        self.find_next_action = QAction(self)
-        self.find_next_action.setShortcut("Ctrl+G")
-        self.find_next_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.find_next_action.triggered.connect(lambda checked=False: self._find_next())
-        self.addAction(self.find_next_action)
-
-        self.find_page_down_shortcut = QShortcut(QKeySequence(Qt.Key.Key_PageDown), self.editor_panel)
-        self.find_page_down_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.find_page_down_shortcut.activated.connect(self._find_next_via_page_key)
-
-        self.find_page_up_shortcut = QShortcut(QKeySequence(Qt.Key.Key_PageUp), self.editor_panel)
-        self.find_page_up_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.find_page_up_shortcut.activated.connect(self._find_previous_via_page_key)
-
-        self.find_close_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self.editor_panel)
-        self.find_close_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.find_close_shortcut.activated.connect(lambda: self.close_find_bar())
 
     def _configure_focus_navigation(self):
         self.menuBar().setFocusPolicy(Qt.FocusPolicy.TabFocus)
@@ -3386,28 +3348,10 @@ class MainWindow(QMainWindow):
             self.editor.setPlainText(text)
 
     def open_find_bar(self):
-        selected_text = self.editor.textCursor().selectedText().replace("\u2029", "\n")
-        self.find_bar.setVisible(True)
-        if selected_text:
-            self.find_input.setText(selected_text)
-        self.find_input.setFocus()
-        self.find_input.selectAll()
-        if not selected_text:
-            self._schedule_find_results(self.find_input.text())
+        self.find_bar.open_bar()
 
     def close_find_bar(self):
-        if not self.find_bar.isVisible():
-            return
-        self.find_bar.setVisible(False)
-        self.find_input.clear()
-        self.find_matches = []
-        self.current_find_index = -1
-        self.pending_find_term = ""
-        self.find_search_timer.stop()
-        self.find_counter_label.setText("")
-        self.editor.setExtraSelections([])
-        self._apply_editor_stylesheet()
-        self.editor.setFocus()
+        self.find_bar.close_bar()
 
     def open_fulltext_search(self):
         if not self.workspace_dir or not os.path.isdir(self.workspace_dir):
@@ -3438,11 +3382,7 @@ class MainWindow(QMainWindow):
         self.recent_files_switcher.open_for_workspace(self.workspace_dir)
 
     def _open_find_bar_with_term(self, term):
-        self.find_bar.setVisible(True)
-        self.find_input.setFocus()
-        self.find_input.setText(term)
-        self.find_input.selectAll()
-        self._schedule_find_results(term)
+        self.find_bar.open_bar(term)
         QTimer.singleShot(0, self.editor.setFocus)
 
     def _start_fulltext_indexing(self):
@@ -3547,124 +3487,6 @@ class MainWindow(QMainWindow):
 
         self.open_testlog(path)
         self._open_find_bar_with_term(query)
-
-    def _schedule_find_results(self, term):
-        self.pending_find_term = term
-        self.find_search_generation += 1
-        self.find_search_timer.start()
-
-    def _run_pending_find_search(self):
-        if self.find_search_running:
-            self.find_search_timer.start()
-            return
-
-        self.find_search_running = True
-        generation = self.find_search_generation
-        term = self.pending_find_term
-        self.find_matches = self._collect_find_matches(term)
-        if not self.find_matches:
-            self.current_find_index = -1
-            self.find_counter_label.setText(self._tr("No Matches") if term else "")
-            self.editor.setExtraSelections([])
-            self._apply_editor_stylesheet()
-            self.find_search_running = False
-            if generation != self.find_search_generation:
-                self.find_search_timer.start()
-            return
-
-        self.current_find_index = self._best_find_match_index()
-        self._apply_find_highlights()
-        self._focus_find_match(self.current_find_index)
-        self.find_search_running = False
-        if generation != self.find_search_generation:
-            self.find_search_timer.start()
-
-    def _collect_find_matches(self, term):
-        if not term:
-            return []
-
-        doc = self.editor.document()
-        matches = []
-        cursor = QTextCursor(doc)
-        while True:
-            cursor = doc.find(term, cursor, QTextDocument.FindFlag(0))
-            if cursor.isNull():
-                break
-            matches.append(QTextCursor(cursor))
-        return matches
-
-    def _best_find_match_index(self):
-        cursor_pos = self.editor.textCursor().selectionStart()
-        for index, match in enumerate(self.find_matches):
-            if match.selectionStart() >= cursor_pos:
-                return index
-        return 0
-
-    def _apply_find_highlights(self):
-        selections = []
-        for index, match in enumerate(self.find_matches):
-            selection = QTextEdit.ExtraSelection()
-            selection.cursor = QTextCursor(match)
-            color = QColor("#A57538") if index == self.current_find_index else QColor("#3080AA")
-            selection.format.setBackground(color)
-            selections.append(selection)
-        self.editor.setExtraSelections(selections)
-        self._apply_editor_stylesheet()
-        if self.find_matches:
-            self.find_counter_label.setText(f"{self.current_find_index + 1} / {len(self.find_matches)}")
-
-    def _focus_find_match(self, index):
-        if not self.find_matches:
-            return
-        self.current_find_index = index % len(self.find_matches)
-        cursor = QTextCursor(self.find_matches[self.current_find_index])
-        self.editor.setTextCursor(cursor)
-        self.editor.ensureCursorVisible()
-        self._apply_find_highlights()
-
-    def _find_next(self):
-        if not self.find_bar.isVisible():
-            self.open_find_bar()
-            return
-        if self.find_matches:
-            self._focus_find_match(self.current_find_index + 1)
-
-    def _find_previous(self):
-        if self.find_matches:
-            self._focus_find_match(self.current_find_index - 1)
-
-    def _find_next_via_page_key(self):
-        if self.find_bar.isVisible() and len(self.find_matches) > 1:
-            self._find_next()
-
-    def _find_previous_via_page_key(self):
-        if self.find_bar.isVisible() and len(self.find_matches) > 1:
-            self._find_previous()
-
-    def _sync_find_current_match_from_cursor(self):
-        if not self.find_bar.isVisible() or not self.find_matches:
-            return
-        cursor = self.editor.textCursor()
-        position = cursor.selectionStart()
-        for index, match in enumerate(self.find_matches):
-            if match.selectionStart() == position and match.selectionEnd() == cursor.selectionEnd():
-                if self.current_find_index != index:
-                    self.current_find_index = index
-                    self._apply_find_highlights()
-                return
-
-    def eventFilter(self, obj, event):
-        if obj is getattr(self, "find_input", None) and event.type() == event.Type.KeyPress:
-            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-                if event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
-                    self._find_previous()
-                else:
-                    self._find_next()
-                return True
-            if event.key() == Qt.Key.Key_Escape:
-                self.close_find_bar()
-                return True
-        return super().eventFilter(obj, event)
 
     def _transform_editor_base64_encode(self):
         text, replace_selection = self._editor_selected_or_all_text()
