@@ -1,4 +1,5 @@
 import base64
+import json
 import random
 import re
 import uuid
@@ -6,7 +7,7 @@ from datetime import date, timedelta
 from urllib.parse import quote as url_quote, unquote as url_unquote
 
 from faker import Faker
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtGui import QAction, QFont, QIntValidator
 from PySide6.QtWidgets import (
     QApplication,
@@ -23,6 +24,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QStatusBar,
+    QTabBar,
+    QTabWidget,
     QTextEdit,
     QToolBar,
     QToolButton,
@@ -214,7 +217,83 @@ TESTDATA_COMPANY_WORDS = {
 }
 
 
+class EditableTabBar(QTabBar):
+    tabRenamed = Signal(int, str)
+    closeOtherTabsRequested = Signal(int)
+
+    def __init__(self, translate=lambda text: text, parent=None):
+        super().__init__(parent)
+        self._tr = translate
+        self._edit_index = -1
+        self._editor = QLineEdit(self)
+        self._editor.hide()
+        self._editor.installEventFilter(self)
+        self._editor.editingFinished.connect(self._finish_edit)
+
+    def mouseDoubleClickEvent(self, event):
+        index = self.tabAt(event.pos())
+        if index >= 0 and event.button() == Qt.MouseButton.LeftButton:
+            self.start_tab_edit(index)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def contextMenuEvent(self, event):
+        index = self.tabAt(event.pos())
+        if index < 0:
+            return
+
+        menu = QMenu(self)
+        rename_action = menu.addAction(self._tr("Rename Tab"))
+        close_action = menu.addAction(self._tr("Close"))
+        close_others_action = menu.addAction(self._tr("Close All Except This"))
+        close_others_action.setEnabled(self.count() > 1)
+
+        action = menu.exec(event.globalPos())
+        if action == rename_action:
+            self.start_tab_edit(index)
+        elif action == close_action:
+            self.tabCloseRequested.emit(index)
+        elif action == close_others_action:
+            self.closeOtherTabsRequested.emit(index)
+
+    def start_tab_edit(self, index):
+        if index < 0:
+            return
+        self._edit_index = index
+        self._editor.setText(self.tabText(index))
+        self._editor.setGeometry(self.tabRect(index).adjusted(4, 2, -4, -2))
+        self._editor.show()
+        self._editor.setFocus(Qt.FocusReason.MouseFocusReason)
+        self._editor.selectAll()
+
+    def _finish_edit(self):
+        if self._edit_index < 0:
+            return
+        index = self._edit_index
+        title = self._editor.text().strip()
+        self._editor.hide()
+        self._edit_index = -1
+        if not title:
+            return
+        self.setTabText(index, title)
+        self.tabRenamed.emit(index, title)
+
+    def eventFilter(self, obj, event):
+        if obj is self._editor and event.type() == event.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self._editor.hide()
+                self._edit_index = -1
+                return True
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._finish_edit()
+                return True
+        return super().eventFilter(obj, event)
+
+
 class TextToolDialog(QDialog):
+    DEFAULT_TAB_TITLE = "Scratch {number}"
+
     def __init__(self, translate, parent=None):
         super().__init__(parent)
         self._tr = translate
@@ -275,15 +354,30 @@ class TextToolDialog(QDialog):
         self.menu_bar = QMenuBar(self)
         layout.setMenuBar(self.menu_bar)
         self.toolbar = QToolBar()
-        self.text_area = QTextEdit()
-        self.text_area.setAcceptRichText(False)
         text_area_font = QFont()
         text_area_font.setFamilies(["Cascadia Code", "Source Code Pro", "Noto Sans Mono", "monospace"])
         text_area_font.setStyleHint(QFont.StyleHint.Monospace)
         text_area_font.setPointSize(12)
-        self.text_area.setFont(text_area_font)
+        self.text_area_font = text_area_font
+        self.tab_widget = QTabWidget()
+        self.tab_bar = EditableTabBar(self._tr, self.tab_widget)
+        self.tab_widget.setTabBar(self.tab_bar)
+        self.tab_widget.setTabsClosable(True)
+        self.tab_widget.setMovable(True)
+        self.tab_widget.currentChanged.connect(self._handle_current_tab_changed)
+        self.tab_widget.tabCloseRequested.connect(self._close_tab)
+        self.tab_bar.tabRenamed.connect(lambda _index, _title: self._save_tabs())
+        self.tab_bar.closeOtherTabsRequested.connect(self._close_other_tabs)
+        self.text_area = None
+        self._loading_tabs = False
         self.status_bar = QStatusBar()
         self.file_menu = QMenu(self)
+        self.new_tab_action = QAction(self)
+        self.new_tab_action.setShortcut("Ctrl+T")
+        self.new_tab_action.triggered.connect(lambda checked=False: self._add_new_tab())
+        self.close_tab_action = QAction(self)
+        self.close_tab_action.setShortcut("Ctrl+W")
+        self.close_tab_action.triggered.connect(lambda checked=False: self._close_current_tab())
         self.save_as_action = QAction(self)
         self.save_as_action.triggered.connect(self._save_text_as)
         self.close_action = QAction(self)
@@ -332,9 +426,16 @@ class TextToolDialog(QDialog):
         self.copy_all_action = QAction(self)
         self.copy_all_action.triggered.connect(self._copy_all_text)
         self.clear_action = QAction(self)
-        self.clear_action.triggered.connect(self.text_area.clear)
+        self.clear_action.triggered.connect(self._clear_current_text)
+        self.new_tab_button = QToolButton(self)
+        self.new_tab_button.clicked.connect(lambda checked=False: self._add_new_tab())
+        self.close_tab_button = QToolButton(self)
+        self.close_tab_button.clicked.connect(lambda checked=False: self._close_current_tab())
 
         self.menu_bar.addMenu(self.file_menu)
+        self.file_menu.addAction(self.new_tab_action)
+        self.file_menu.addAction(self.close_tab_action)
+        self.file_menu.addSeparator()
         self.file_menu.addAction(self.save_as_action)
         self.file_menu.addSeparator()
         self.file_menu.addAction(self.close_action)
@@ -349,6 +450,9 @@ class TextToolDialog(QDialog):
         self.transform_menu.addAction(self.format_html_action)
 
         self.toolbar.addWidget(self.generate_lorem_button)
+        self.toolbar.addWidget(self.new_tab_button)
+        self.toolbar.addWidget(self.close_tab_button)
+        self.toolbar.addSeparator()
         self.toolbar.addAction(self.counter_string_action)
         self.toolbar.addSeparator()
         self.toolbar.addAction(self.uuid_action)
@@ -359,20 +463,20 @@ class TextToolDialog(QDialog):
         self.toolbar.addAction(self.clear_action)
 
         self.find_bar = DocumentFindBar(
-            self.text_area,
+            None,
             translate=self._tr,
             action_parent=self,
             shortcut_parent=self,
+            editor_provider=self._current_text_area,
             parent=self,
         )
 
         layout.addWidget(self.toolbar)
-        layout.addWidget(self.text_area)
+        layout.addWidget(self.tab_widget)
         layout.addWidget(self.find_bar)
         layout.addWidget(self.status_bar)
 
-        self.text_area.textChanged.connect(self._update_counts)
-        self.text_area.cursorPositionChanged.connect(self._update_counts)
+        self._load_tabs()
         self._configure_focus_navigation()
         self.retranslate_ui()
         self._update_counts()
@@ -380,14 +484,167 @@ class TextToolDialog(QDialog):
     def _with_mnemonic(self, text):
         return f"&{text}" if text else text
 
+    def _create_text_area(self, text=""):
+        text_area = QTextEdit()
+        text_area.setAcceptRichText(False)
+        text_area.setFont(self.text_area_font)
+        text_area.setPlaceholderText(self._tr("Paste text here..."))
+        text_area.setPlainText(text)
+        text_area.textChanged.connect(self._handle_text_changed)
+        text_area.cursorPositionChanged.connect(self._update_counts)
+        return text_area
+
+    def _current_text_area(self):
+        widget = self.tab_widget.currentWidget()
+        return widget if isinstance(widget, QTextEdit) else self.text_area
+
+    def _default_tab_title(self, number):
+        return self._tr(self.DEFAULT_TAB_TITLE).format(number=number)
+
+    def _add_new_tab(self, text="", title=None, make_current=True):
+        text_area = self._create_text_area(text)
+        tab_number = self.tab_widget.count() + 1
+        tab_title = title or self._default_tab_title(tab_number)
+        index = self.tab_widget.addTab(text_area, tab_title)
+        if make_current:
+            self.tab_widget.setCurrentIndex(index)
+        self._update_tab_close_state()
+        self._update_counts()
+        if not self._loading_tabs:
+            self._save_tabs()
+        return text_area
+
+    def _close_current_tab(self):
+        self._close_tab(self.tab_widget.currentIndex())
+
+    def _close_tab(self, index):
+        if index < 0:
+            return
+        if self.tab_widget.count() <= 1:
+            text_area = self._current_text_area()
+            if text_area is not None:
+                text_area.clear()
+            return
+        widget = self.tab_widget.widget(index)
+        self.tab_widget.removeTab(index)
+        if widget is not None:
+            widget.deleteLater()
+        self._update_tab_close_state()
+        self._handle_current_tab_changed(self.tab_widget.currentIndex())
+        self._save_tabs()
+
+    def _close_other_tabs(self, keep_index):
+        if keep_index < 0 or self.tab_widget.count() <= 1:
+            return
+        for index in reversed(range(self.tab_widget.count())):
+            if index == keep_index:
+                continue
+            widget = self.tab_widget.widget(index)
+            self.tab_widget.removeTab(index)
+            if widget is not None:
+                widget.deleteLater()
+        self.tab_widget.setCurrentIndex(0)
+        self._update_tab_close_state()
+        self._handle_current_tab_changed(0)
+        self._save_tabs()
+
+    def _handle_current_tab_changed(self, _index):
+        self.text_area = self._current_text_area()
+        self.find_bar.close_bar()
+        self._update_counts()
+        self._save_tabs()
+
+    def _handle_text_changed(self):
+        self._update_counts()
+        self._save_tabs()
+
+    def _clear_current_text(self):
+        text_area = self._current_text_area()
+        if text_area is not None:
+            text_area.clear()
+
+    def _update_tab_close_state(self):
+        can_close_tab = self.tab_widget.count() > 1
+        self.close_tab_action.setEnabled(can_close_tab)
+        self.close_tab_button.setEnabled(can_close_tab)
+
+    def _tab_texts(self):
+        return [
+            self.tab_widget.widget(index).toPlainText()
+            for index in range(self.tab_widget.count())
+            if isinstance(self.tab_widget.widget(index), QTextEdit)
+        ]
+
+    def _tab_titles(self):
+        return [self.tab_widget.tabText(index) for index in range(self.tab_widget.count())]
+
+    def _serialized_tabs(self):
+        return {
+            "texts": self._tab_texts(),
+            "titles": self._tab_titles(),
+            "current_index": max(0, self.tab_widget.currentIndex()),
+        }
+
+    def _save_tabs(self):
+        if self._loading_tabs:
+            return
+        self.settings.setValue("text_tool_tabs", json.dumps(self._serialized_tabs()))
+
+    @classmethod
+    def _normalize_saved_tabs(cls, saved_value):
+        try:
+            data = json.loads(saved_value) if saved_value else {}
+        except (TypeError, ValueError):
+            data = {}
+
+        texts = data.get("texts") if isinstance(data, dict) else None
+        if not isinstance(texts, list):
+            texts = [""]
+        texts = [text if isinstance(text, str) else str(text) for text in texts]
+        if not texts:
+            texts = [""]
+
+        titles = data.get("titles") if isinstance(data, dict) else None
+        if not isinstance(titles, list):
+            titles = []
+        titles = [title if isinstance(title, str) else str(title) for title in titles]
+        titles = [
+            title.strip() if title.strip() else cls.DEFAULT_TAB_TITLE.format(number=index + 1)
+            for index, title in enumerate(titles[:len(texts)])
+        ]
+        while len(titles) < len(texts):
+            titles.append(cls.DEFAULT_TAB_TITLE.format(number=len(titles) + 1))
+
+        current_index = data.get("current_index", 0) if isinstance(data, dict) else 0
+        if not isinstance(current_index, int):
+            current_index = 0
+        current_index = max(0, min(current_index, len(texts) - 1))
+        return texts, titles, current_index
+
+    def _load_tabs(self):
+        self._loading_tabs = True
+        texts, titles, current_index = self._normalize_saved_tabs(self.settings.value("text_tool_tabs", "", type=str))
+        for index, (text, title) in enumerate(zip(texts, titles)):
+            default_title = self.DEFAULT_TAB_TITLE.format(number=index + 1)
+            localized_title = self._default_tab_title(index + 1) if title == default_title else title
+            self._add_new_tab(text=text, title=localized_title, make_current=False)
+        self.tab_widget.setCurrentIndex(current_index)
+        self.text_area = self._current_text_area()
+        self._loading_tabs = False
+        self._update_tab_close_state()
+
     def _configure_focus_navigation(self):
         self.menu_bar.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.toolbar.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.generate_lorem_button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-        self.text_area.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.tab_widget.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        for index in range(self.tab_widget.count()):
+            self.tab_widget.widget(index).setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         toolbar_widgets = [
             self.generate_lorem_button,
+            self.new_tab_button,
+            self.close_tab_button,
             self.toolbar.widgetForAction(self.counter_string_action),
             self.toolbar.widgetForAction(self.uuid_action),
             self.testdata_button,
@@ -395,7 +652,7 @@ class TextToolDialog(QDialog):
             self.toolbar.widgetForAction(self.copy_all_action),
             self.toolbar.widgetForAction(self.clear_action),
         ]
-        focusable_widgets = [self.menu_bar] + [widget for widget in toolbar_widgets if widget is not None] + [self.text_area]
+        focusable_widgets = [self.menu_bar] + [widget for widget in toolbar_widgets if widget is not None] + [self.tab_widget]
         for widget in focusable_widgets[1:-1]:
             widget.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         for current_widget, next_widget in zip(focusable_widgets, focusable_widgets[1:]):
@@ -403,9 +660,14 @@ class TextToolDialog(QDialog):
 
     def retranslate_ui(self):
         self.setWindowTitle(self._tr("Text Tool"))
-        self.text_area.setPlaceholderText(self._tr("Paste text here..."))
+        for index in range(self.tab_widget.count()):
+            text_area = self.tab_widget.widget(index)
+            if isinstance(text_area, QTextEdit):
+                text_area.setPlaceholderText(self._tr("Paste text here..."))
         self.find_bar.retranslate_ui()
         self.file_menu.setTitle(self._with_mnemonic(self._tr("File")))
+        self.new_tab_action.setText(self._tr("New Tab"))
+        self.close_tab_action.setText(self._tr("Close Tab"))
         self.save_as_action.setText(self._tr("Save As..."))
         self.close_action.setText(self._tr("Close"))
         self.transform_menu.setTitle(self._with_mnemonic(self._tr("Transform")))
@@ -417,6 +679,10 @@ class TextToolDialog(QDialog):
         self.format_html_action.setText(self._tr("Format HTML"))
         self.generate_lorem_button.setText(self._tr("Generate Lorem"))
         self.generate_lorem_button.setToolTip(self._tr("Generate Lorem"))
+        self.new_tab_button.setText(self._tr("New Tab"))
+        self.new_tab_button.setToolTip(self._tr("New Tab"))
+        self.close_tab_button.setText(self._tr("Close Tab"))
+        self.close_tab_button.setToolTip(self._tr("Close Tab"))
         self.counter_string_action.setText(self._tr("Counter String"))
         self.uuid_action.setText(self._tr("UUID"))
         self.testdata_button.setText(self._tr("Testdata"))
@@ -429,9 +695,10 @@ class TextToolDialog(QDialog):
         self._update_counts()
 
     def _update_counts(self):
-        text = self.text_area.toPlainText()
+        text_area = self._current_text_area()
+        text = text_area.toPlainText() if text_area is not None else ""
         without_whitespace = "".join(ch for ch in text if not ch.isspace())
-        cursor_pos = self.text_area.textCursor().position()
+        cursor_pos = text_area.textCursor().position() if text_area is not None else 0
         self.status_bar.showMessage(
             self._tr("Characters: {with_ws} | Without whitespace: {without_ws} | Cursor: {cursor_pos}").format(
                 with_ws=len(text),
@@ -855,7 +1122,8 @@ class TextToolDialog(QDialog):
         return re.sub(r"[^a-z0-9]+", "", normalized)
 
     def _copy_all_text(self):
-        QApplication.clipboard().setText(self.text_area.toPlainText())
+        text_area = self._current_text_area()
+        QApplication.clipboard().setText(text_area.toPlainText() if text_area is not None else "")
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_F10:
@@ -867,4 +1135,5 @@ class TextToolDialog(QDialog):
 
     def closeEvent(self, event):
         self.settings.setValue("text_tool_size", self.size())
+        self._save_tabs()
         super().closeEvent(event)

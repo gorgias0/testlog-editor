@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 
 import text_tool_dialog
 from html_tools import pretty_print_html
@@ -55,6 +56,24 @@ def test_generate_lorem_text_ends_last_paragraph_with_end_without_wrappers():
     assert not dialog.text_area.value.startswith("START")
     assert not dialog.text_area.value.endswith("\n\nEND")
     assert dialog.text_area.value.endswith(".\n###")
+
+
+def test_normalize_saved_tabs_restores_texts_and_current_index():
+    saved_value = json.dumps({"texts": ["alpha", "beta"], "titles": ["One", "Two"], "current_index": 1})
+
+    texts, titles, current_index = TextToolDialog._normalize_saved_tabs(saved_value)
+
+    assert texts == ["alpha", "beta"]
+    assert titles == ["One", "Two"]
+    assert current_index == 1
+
+
+def test_normalize_saved_tabs_falls_back_to_empty_scratchpad():
+    texts, titles, current_index = TextToolDialog._normalize_saved_tabs("not json")
+
+    assert texts == [""]
+    assert titles == ["Scratch 1"]
+    assert current_index == 0
 
 
 def test_pretty_print_html_expands_nested_markup():
