@@ -4,7 +4,6 @@ from testlog_utils import (
     get_testlog_status,
     guess_markdown_from_plain_text,
     normalize_testlog_status,
-    preferred_markdown_paste_text,
     resolve_preview_image_path,
     set_testlog_status,
     strip_testlog_front_matter,
@@ -63,24 +62,6 @@ def test_strip_testlog_front_matter_returns_renderable_body():
     text = "---\nstatus: done\n---\n\n# Note\n"
 
     assert strip_testlog_front_matter(text) == "# Note\n"
-
-
-def test_preferred_markdown_paste_text_prefers_markdown_mime_content():
-    mime_data = {
-        "text/plain": b"rendered text only",
-        "text/markdown": b"# Title\n\n- item",
-    }
-
-    assert preferred_markdown_paste_text(mime_data, "rendered text only") == "# Title\n\n- item"
-
-
-def test_preferred_markdown_paste_text_falls_back_to_plain_text():
-    mime_data = {
-        "text/plain": b"plain text",
-        "text/html": b"<p>plain text</p>",
-    }
-
-    assert preferred_markdown_paste_text(mime_data, "plain text") == "plain text"
 
 
 def test_guess_markdown_from_plain_text_converts_bullets_and_checkboxes():

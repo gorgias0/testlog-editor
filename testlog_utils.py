@@ -15,11 +15,6 @@ TESTLOG_STATUS_LABELS = {
 }
 IMAGE_REFERENCE_PATTERN = re.compile(r'!\[.*?\]\(images/([^)]+)\)')
 HEADING_PATTERN = re.compile(r'^#+\s+(.+)$', re.MULTILINE)
-MARKDOWN_MIME_TYPES = (
-    "text/markdown",
-    "text/x-markdown",
-    "application/x-markdown",
-)
 CHECKBOX_PATTERN = re.compile(r"^\s*([☐☑☒])\s+(.*)$")
 BULLET_PATTERN = re.compile(r"^\s*[•◦▪‣·*-–—]\s+(.*)$")
 NUMBERED_LIST_PATTERN = re.compile(r"^\s*(\d+)[.)]\s+(.*)$")
@@ -111,23 +106,6 @@ def suggest_filename_from_heading(text, default="export"):
     heading = match.group(1).strip()
     filename = re.sub(r"[^\w\s-]", "", heading)[:100].strip()
     return filename or default
-
-
-def preferred_markdown_paste_text(mime_data, plain_text):
-    for mime_type in MARKDOWN_MIME_TYPES:
-        raw_value = mime_data.get(mime_type)
-        if raw_value is None:
-            continue
-
-        if isinstance(raw_value, str):
-            return raw_value
-
-        if isinstance(raw_value, (bytes, bytearray)):
-            decoded = raw_value.decode("utf-8", errors="ignore")
-            if decoded:
-                return decoded
-
-    return plain_text
 
 
 def guess_markdown_from_plain_text(text):

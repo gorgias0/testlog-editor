@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate, QStyleOptionViewItem,
 )
 from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, Signal, QItemSelectionModel, QSize, QPoint, QFileInfo, QRect
-from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QIntValidator, QShortcut, QColor, QTextCharFormat, QSyntaxHighlighter, QDesktopServices, QPainter
+from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QTextBlockFormat, QIntValidator, QShortcut, QColor, QTextCharFormat, QSyntaxHighlighter, QDesktopServices, QPainter
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineContextMenuRequest, QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebChannel import QWebChannel
@@ -54,7 +54,6 @@ from testlog_utils import (
     guess_markdown_from_plain_text,
     highlight_fulltext_snippet,
     normalize_testlog_status,
-    preferred_markdown_paste_text,
     read_testlog_status_from_archive,
     resolve_preview_image_path,
     set_testlog_status,
@@ -89,6 +88,8 @@ INDENT_STYLE_TEXT = {
     "spaces4": "    ",
     "tabs": "\t",
 }
+EDITOR_LINE_HEIGHT_PERCENT = 115
+EDITOR_LINE_HEIGHT_TYPE = QTextBlockFormat.LineHeightTypes.ProportionalHeight.value
 
 
 EDITOR_ON_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 52">
@@ -121,6 +122,9 @@ class Editor(QTextEdit):
         self._preview_scroll_sync_timer.timeout.connect(self._clear_preview_scroll_sync)
         self.verticalScrollBar().sliderPressed.connect(self._begin_preview_scroll_sync)
         self.verticalScrollBar().sliderReleased.connect(self._hold_preview_scroll_sync_briefly)
+        self._applying_block_spacing = False
+        self.document().contentsChange.connect(self._apply_line_spacing_for_changed_range)
+        QTimer.singleShot(0, self.apply_line_spacing_to_document)
 
     def _capture_view_state(self):
         return (
@@ -164,13 +168,61 @@ class Editor(QTextEdit):
             image = QImage(source.imageData())
             self.on_image_paste(image)
         elif source.hasText():
-            mime_data = {
-                mime_type: bytes(source.data(mime_type))
-                for mime_type in source.formats()
-            }
-            self.insertPlainText(preferred_markdown_paste_text(mime_data, source.text()))
+            self.insertPlainText(source.text())
         else:
             super().insertFromMimeData(source)
+
+    def apply_line_spacing_to_document(self):
+        self._apply_line_spacing_range(0, self.document().characterCount())
+
+    def _apply_line_spacing_for_changed_range(self, position, chars_removed, chars_added):
+        if self._applying_block_spacing:
+            return
+
+        span = max(chars_removed, chars_added, 1)
+        self._apply_line_spacing_range(position, span)
+
+    def _apply_line_spacing_range(self, position, span):
+        doc = self.document()
+        if doc is None or self._applying_block_spacing:
+            return
+
+        start_block = doc.findBlock(max(0, position))
+        end_pos = min(max(0, position) + max(0, span), max(0, doc.characterCount() - 1))
+        end_block = doc.findBlock(end_pos)
+
+        if not start_block.isValid():
+            start_block = doc.firstBlock()
+        if not end_block.isValid():
+            end_block = doc.lastBlock()
+        if not start_block.isValid() or not end_block.isValid():
+            return
+
+        cursor = QTextCursor(doc)
+        cursor.beginEditBlock()
+        self._applying_block_spacing = True
+        try:
+            block = start_block
+            while block.isValid():
+                block_format = block.blockFormat()
+                if (
+                    block_format.lineHeight() != EDITOR_LINE_HEIGHT_PERCENT
+                    or block_format.lineHeightType() != EDITOR_LINE_HEIGHT_TYPE
+                ):
+                    block_format.setLineHeight(
+                        float(EDITOR_LINE_HEIGHT_PERCENT),
+                        EDITOR_LINE_HEIGHT_TYPE,
+                    )
+                    cursor.setPosition(block.position())
+                    cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+                    cursor.mergeBlockFormat(block_format)
+
+                if block == end_block:
+                    break
+                block = block.next()
+        finally:
+            self._applying_block_spacing = False
+            cursor.endEditBlock()
 
     def keyPressEvent(self, event):
         if event.key() in (
@@ -324,10 +376,8 @@ class Editor(QTextEdit):
         if indent and not line_text.strip():
             cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
             cursor.insertText("")
+            cursor.insertText("\n")
             self._set_text_cursor_visible(cursor)
-            from PySide6.QtGui import QKeyEvent
-            event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
-            super().keyPressEvent(event)
             return
 
         list_text = line_text[len(indent):]
