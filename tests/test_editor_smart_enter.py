@@ -62,6 +62,22 @@ def test_smart_enter_clears_whitespace_only_line_before_newline():
     assert editor.toPlainText() == "\n"
 
 
+def test_smart_enter_adds_new_empty_line_for_plain_text():
+    editor = _editor_with_cursor_at_end("plain text")
+
+    _press_smart_enter(editor)
+
+    assert editor.toPlainText() == "plain text\n"
+
+
+def test_smart_enter_adds_new_empty_line_when_current_line_is_empty():
+    editor = _editor_with_cursor_at_end("")
+
+    _press_smart_enter(editor)
+
+    assert editor.toPlainText() == "\n"
+
+
 def test_smart_enter_continues_double_indented_numbered_list_and_scrolls_to_cursor():
     body = "\n".join(f"line {i}" for i in range(80))
     nested_list = "1. sdfdsf\n  2. fdsfds\n    3. fdfdsfds"
@@ -121,6 +137,24 @@ def test_tab_indents_ordered_sibling_selection_with_nested_numbering():
     editor._handle_tab()
 
     assert editor.toPlainText() == "1. fdsf\n  1. sds\n  2. dssdas"
+
+
+def test_move_lines_down_renumbers_ordered_list():
+    editor = _editor_with_cursor_at_end("1. first\n2. second\n3. third")
+    _select_text(editor, "2. second")
+
+    editor.move_lines_down()
+
+    assert editor.toPlainText() == "1. first\n2. third\n3. second"
+
+
+def test_move_lines_up_renumbers_nested_ordered_list():
+    editor = _editor_with_cursor_at_end("1. outer\n  1. nested one\n  2. nested two\n2. tail")
+    _select_text(editor, "  2. nested two")
+
+    editor.move_lines_up()
+
+    assert editor.toPlainText() == "1. outer\n  1. nested two\n  2. nested one\n2. tail"
 
 
 def test_tab_indents_and_normalizes_ordered_marker_without_space():

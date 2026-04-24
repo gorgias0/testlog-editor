@@ -460,10 +460,8 @@ class Editor(QTextEdit):
             self._set_text_cursor_visible(cursor)
             return
 
-        # Default behavior - use super with a synthetic Return key event
-        from PySide6.QtGui import QKeyEvent
-        event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
-        super().keyPressEvent(event)
+        cursor.insertText('\n')
+        self._set_text_cursor_visible(cursor)
 
     def _split_list_item(self, current_prefix, content, position_in_block, next_prefix):
         cursor = self.textCursor()
@@ -870,6 +868,9 @@ class Editor(QTextEdit):
                 replace_end = len(full_text)
             moved_text = full_text[start_pos:end_pos]
             adjacent_text = full_text[end_pos:replace_end]
+            if adjacent_text and not adjacent_text.endswith("\n") and moved_text.endswith("\n"):
+                adjacent_text += "\n"
+                moved_text = moved_text[:-1]
             replacement_text = adjacent_text + moved_text
             selection_start = start_pos + len(adjacent_text)
             selection_end = selection_start + len(moved_text)
@@ -880,6 +881,7 @@ class Editor(QTextEdit):
         cursor.setPosition(replace_end, cursor.MoveMode.KeepAnchor)
         cursor.removeSelectedText()
         cursor.insertText(replacement_text)
+        self._renumber_ordered_lists()
 
         new_cursor = self.textCursor()
         moved_length = len(moved_text)
@@ -894,6 +896,54 @@ class Editor(QTextEdit):
 
         cursor.endEditBlock()
         self._restore_view_state(view_state)
+
+    def _renumber_ordered_lists(self):
+        doc = self.document()
+        block = doc.firstBlock()
+        ordered_levels = []
+        cursor = QTextCursor(doc)
+
+        while block.isValid():
+            ordered_match = self._ordered_list_match(block.text())
+            if not ordered_match:
+                ordered_levels.clear()
+                block = block.next()
+                continue
+
+            indent = ordered_match.group(1)
+
+            while ordered_levels and len(ordered_levels[-1][0]) > len(indent):
+                ordered_levels.pop()
+
+            while ordered_levels and ordered_levels[-1][0] != indent and len(ordered_levels[-1][0]) >= len(indent):
+                ordered_levels.pop()
+
+            if ordered_levels and ordered_levels[-1][0] == indent:
+                next_number = ordered_levels[-1][1] + 1
+                ordered_levels[-1] = (indent, next_number)
+            else:
+                next_number = 1
+                ordered_levels.append((indent, next_number))
+
+            marker_length = (
+                len(ordered_match.group(2))
+                + len(ordered_match.group(3))
+                + len(ordered_match.group(4))
+            )
+            replacement_marker = f"{next_number}. "
+            existing_marker = block.text()[
+                len(indent):len(indent) + marker_length
+            ]
+            if existing_marker != replacement_marker:
+                number_start = block.position() + len(indent)
+                cursor.setPosition(number_start)
+                cursor.setPosition(
+                    number_start + marker_length,
+                    QTextCursor.MoveMode.KeepAnchor,
+                )
+                cursor.insertText(replacement_marker)
+
+            block = block.next()
 
 
 class MarkdownHighlighter(QSyntaxHighlighter):
