@@ -103,3 +103,7 @@ There is now a small unit test suite for extracted helper logic, but UI behavior
 - If you add dependencies or commands, update both this file and `README.md`.
 - If you add dependencies make sure to update requirements.txt and testlog.spec if needed.
 - Windows packaging should use the committed `testlog.spec` one-directory build, and packaged output remains ignored via `build/` and `dist/`.
+
+# ExecPlans
+
+When writing complex features or significant refactors, use an ExecPlan (as described in PLANS.md) from design to implementation.
