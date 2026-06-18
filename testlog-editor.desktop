@@ -4,6 +4,7 @@ Type=Application
 Name=TestLog Editor
 Comment=Markdown-based test log editor
 Exec=__EXEC__
+Icon=__ICON__
 Path=__ROOT_DIR__
 Terminal=false
 Categories=Utility;Office;
