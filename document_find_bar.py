@@ -31,6 +31,9 @@ class DocumentFindBar(QWidget):
         self.pending_term = ""
         self.search_generation = 0
         self.search_running = False
+        # Where the search should start: the selection start before a changed term cleared it.
+        self._search_anchor = None
+        self._matches_dirty = False
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -55,6 +58,13 @@ class DocumentFindBar(QWidget):
         self.search_timer.setSingleShot(True)
         self.search_timer.setInterval(180)
         self.search_timer.timeout.connect(self._run_pending_search)
+
+        # Edits move and stretch the stored match cursors, so matches are collected again
+        # shortly after the text changes (and right away before Next/Previous).
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.setSingleShot(True)
+        self.refresh_timer.setInterval(180)
+        self.refresh_timer.timeout.connect(self._refresh_matches_after_edit)
 
         self.find_input.textChanged.connect(self._schedule_results)
         self.prev_button.clicked.connect(lambda checked=False: self.find_previous())
@@ -98,7 +108,41 @@ class DocumentFindBar(QWidget):
     def _connect_editor_cursor(self, editor):
         if editor is not None and editor not in self._connected_editors:
             editor.cursorPositionChanged.connect(self.sync_current_match_from_cursor)
+            editor.document().contentsChanged.connect(lambda editor=editor: self._on_document_edited(editor))
             self._connected_editors.add(editor)
+
+    def _on_document_edited(self, editor):
+        if editor is not self._active_editor or not self.isVisible() or not self.pending_term or self.search_running:
+            return
+        self._matches_dirty = True
+        self.refresh_timer.start()
+
+    def _refresh_matches_after_edit(self):
+        if not self._matches_dirty:
+            return
+        self._matches_dirty = False
+        self.refresh_timer.stop()
+        editor = self._current_editor()
+        if editor is None or not self.isVisible():
+            return
+        self.matches = self._collect_matches(editor, self.pending_term)
+        if not self.matches:
+            self.current_index = -1
+            self.counter_label.setText(self._tr("No Matches"))
+            self._clear_editor_highlights(editor)
+        else:
+            self._search_anchor = None
+            self.current_index = self._best_match_index(editor)
+            self._apply_find_highlights(editor)
+        self._notify_match_state_changed()
+
+    def _cursor_on_current_match(self):
+        editor = self._current_editor()
+        if editor is None or not self.matches or self.current_index < 0:
+            return False
+        cursor = editor.textCursor()
+        match = self.matches[self.current_index]
+        return cursor.selectionStart() == match.selectionStart() and cursor.selectionEnd() == match.selectionEnd()
 
     def _current_editor(self):
         editor = self._editor_provider() if self._editor_provider is not None else self._editor
@@ -157,6 +201,8 @@ class DocumentFindBar(QWidget):
         self.current_index = -1
         self.pending_term = ""
         self.search_timer.stop()
+        self.refresh_timer.stop()
+        self._matches_dirty = False
         self.counter_label.setText("")
         self._clear_editor_highlights(editor)
         self._notify_match_state_changed()
@@ -167,6 +213,9 @@ class DocumentFindBar(QWidget):
         term_changed = term != self.pending_term
         self.pending_term = term
         self.search_generation += 1
+        if term_changed and self._active_editor is not None:
+            # Clearing the selected match below leaves the cursor at its end; start from its start.
+            self._search_anchor = self._active_editor.textCursor().selectionStart()
         if term_changed or not term:
             self._clear_active_match_state(self._active_editor)
         self.search_timer.start()
@@ -216,7 +265,7 @@ class DocumentFindBar(QWidget):
     def _best_match_index(self, editor):
         if editor is None:
             return 0
-        cursor_pos = editor.textCursor().selectionStart()
+        cursor_pos = self._search_anchor if self._search_anchor is not None else editor.textCursor().selectionStart()
         for index, match in enumerate(self.matches):
             if match.selectionStart() >= cursor_pos:
                 return index
@@ -281,12 +330,22 @@ class DocumentFindBar(QWidget):
         if not self.isVisible():
             self.open_bar()
             return
+        on_match = self._refresh_before_navigation()
         if self.matches:
-            self._focus_match(self.current_index + 1)
+            # After an edit the nearest match may be ahead of the cursor rather than selected.
+            self._focus_match(self.current_index + 1 if on_match else self.current_index)
 
     def find_previous(self):
+        self._refresh_before_navigation()
         if self.matches:
             self._focus_match(self.current_index - 1)
+
+    def _refresh_before_navigation(self):
+        if not self._matches_dirty:
+            return True
+        self._search_anchor = None
+        self._refresh_matches_after_edit()
+        return self._cursor_on_current_match()
 
     def _find_next_via_page_key(self):
         if self.isVisible() and len(self.matches) > 1:
