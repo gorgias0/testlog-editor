@@ -32,7 +32,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-The project currently depends on `PySide6`, `markdown-it-py`, `mdit-py-plugins`, `Faker`, `pyinstaller`, and `pytest`.
+The project currently depends on `PySide6`, `markdown-it-py`, `mdit-py-plugins`, `Faker`, `pyinstaller`, and `pytest`. PySide6 is capped below 6.12 in `requirements.txt`: 6.12.0 crashes on Python 3.11 when the syntax highlighter runs (see the comment there).
 
 ## Packaging
 

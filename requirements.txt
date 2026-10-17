@@ -1,4 +1,7 @@
-PySide6
+# PySide6 6.12.0 crashes on Python 3.11 ("Fatal Python error: none_dealloc") as soon as a
+# QSyntaxHighlighter calls back into Qt, which the editor's highlighter does on every edit.
+# 6.8-6.11 are fine; raise the cap once a fixed release has been checked.
+PySide6>=6.8,<6.12
 markdown-it-py
 mdit-py-plugins
 Faker
