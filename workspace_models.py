@@ -10,6 +10,7 @@ from testlog_utils import (
     normalize_testlog_tags,
     read_testlog_header_from_archive,
 )
+from trash import skip_trash_dirs
 
 TESTLOG_STATUS_ROLE = Qt.ItemDataRole.UserRole + 20
 TESTLOG_TAGS_ROLE = Qt.ItemDataRole.UserRole + 21
@@ -242,7 +243,8 @@ class WorkspaceSortProxyModel(QSortFilterProxyModel):
             return set()
 
         matching_dirs = set()
-        for directory, _, filenames in os.walk(root):
+        for directory, dirs, filenames in os.walk(root):
+            skip_trash_dirs(root, directory, dirs)
             if any(self._name_and_tags_match(directory, filename) for filename in filenames):
                 key = self._path_key(directory)
                 root_key = self._path_key(root)

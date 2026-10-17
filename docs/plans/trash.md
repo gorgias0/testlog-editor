@@ -15,7 +15,8 @@ How to see it working: delete a note, open the Trash folder in the sidebar and f
 ## Progress
 
 - [x] (2026-10-17) Milestone 1: `trash.py` (`move_to_trash`, `restore_from_trash`, `purge_trash`, `empty_trash`, `is_in_trash`, `skip_trash_dirs`, `available_path`, record file handling); `MainWindow._available_path` now delegates to `trash.available_path`. `tests/test_trash.py` (26 tests); 134 passed. Three deliberate mutations of `trash.py` (ignore modification time, clean folders inside trashed folders, trust a record pointing outside the workspace) were each caught by exactly one test.
-- [ ] Milestone 2: the app uses it: Delete moves to Trash outside Trash and deletes permanently inside it; purge on workspace open; Trash is skipped by every workspace scan; scripted check in the real window.
+- [x] (2026-10-17) Milestone 1 committed as `f86b87e`.
+- [x] (2026-10-17) Milestone 2: `delete_item` moves to Trash outside it (new dialog texts) and deletes permanently inside it, refuses the Trash folder itself, and saves the open note first if it is being trashed; `_purge_workspace_trash` runs in `_set_workspace`; `skip_trash_dirs` in all five workspace walks, and the recent-files loop in `_open_most_recent_testlog` skips notes in Trash; 3 Swedish strings. 134 passed. Scripted real-window run (see `Artifacts and Notes`).
 - [ ] Milestone 3: Trash in the sidebar: localized label, bin icon, sorted last, record file hidden; Restore and Empty Trash in the right-click menu; translations; scripted check and screenshots.
 - [ ] Milestone 4: `README.md` and `AGENTS.md`; full test run; retrospective; manual check on a real display.
 
@@ -52,6 +53,12 @@ How to see it working: delete a note, open the Trash folder in the sidebar and f
 - Decision: `restore_from_trash` falls back to the item's path inside Trash when a record's `original` would land outside the workspace or inside Trash.
   Rationale: the record file is plain JSON in a synced folder and could be edited or damaged; a restore must never write outside the workspace.
   Date/Author: 2026-10-17 / Claude.
+- Decision: when the open note (or a folder containing it) is moved to Trash, unsaved edits are saved first (`_flush_pending_changes`), and the move is cancelled if that save fails.
+  Rationale: Trash is meant for restoring; the trashed copy should hold the latest text. Permanent deletion inside Trash keeps today's behaviour (no save).
+  Date/Author: 2026-10-17 / Claude.
+- Decision: Delete on the Trash folder itself does nothing (no dialog) already in Milestone 2, rather than waiting for Milestone 3's menu changes.
+  Rationale: otherwise the Delete key on the Trash folder would offer to delete all of Trash permanently through the generic folder dialog.
+  Date/Author: 2026-10-17 / Claude.
 - Decision: record keys and stored original paths use `/` as separator regardless of operating system, and times are stored as Unix timestamps (seconds since 1970, UTC).
   Rationale: the workspace may be shared between a Windows and a Linux machine through a sync tool; `/` and UTC timestamps read the same on both.
   Date/Author: 2026-10-17 / Claude.
@@ -59,7 +66,9 @@ How to see it working: delete a note, open the Trash folder in the sidebar and f
 
 ## Outcomes & Retrospective
 
-Milestone 1 (2026-10-17): every Trash rule exists as a tested, Qt-free function. Nothing in the app calls it yet apart from the shared `available_path`. Milestones 2-4 remain.
+Milestone 1 (2026-10-17): every Trash rule exists as a tested, Qt-free function. Nothing in the app calls it yet apart from the shared `available_path`.
+
+Milestone 2 (2026-10-17): Delete now moves to Trash, items in Trash are kept out of every search and scan, deleting inside Trash is permanent, and the 30-day purge runs when a workspace opens. Trash still looks like an ordinary folder in the sidebar and has no Restore yet; Milestones 3-4 remain.
 
 
 ## Context and Orientation
@@ -143,7 +152,24 @@ All milestones are code plus tests and can be redone after `git checkout -- <fil
 
 ## Artifacts and Notes
 
-To be filled in during implementation.
+Milestone 2, real window (offscreen, scratch settings, `QMessageBox.question` patched to answer Yes), workspace with `tdialog/login`, `tdialog/checkout` (both tagged `td`), `meetings/weekly` and `top`, all containing the word `secretword`:
+
+    dialog: Move login.testlog to Trash?
+    open note after deleting it: top.testlog
+    trashed copy has unsaved edit: True
+    folder dialog: Move folder meetings to Trash?
+    on disk: ['Trash/meetings/weekly.testlog', 'Trash/tdialog/login.testlog', 'tdialog/checkout.testlog', 'top.testlog']
+    records: ['meetings', 'tdialog/login.testlog']
+    full-text index: ['tdialog/checkout.testlog', 'top.testlog']
+    tag suggestions: ['td']
+    switcher 'login' matches: []
+    sidebar '#td' matching folders: ['.', 'tdialog']
+    delete on Trash itself asked: False | Trash exists: True
+    inside-Trash dialog: Delete login.testlog? This cannot be undone.
+    on disk: ['Trash/meetings/weekly.testlog', 'tdialog/checkout.testlog', 'top.testlog']
+    after reopening with meetings trashed 31 days ago: ['tdialog/checkout.testlog', 'top.testlog'] | Trash contents: []
+
+The note opened after deleting the open one is the next row in the tree, which can be in another folder (`top.testlog` here); that is the existing delete behaviour, unchanged.
 
 
 ## Interfaces and Dependencies

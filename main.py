@@ -75,7 +75,7 @@ from testlog_utils import (
     TESTLOG_STATUS_OPTIONS,
 )
 from translations import TRANSLATIONS
-from trash import available_path
+from trash import TrashError, available_path, is_in_trash, move_to_trash, purge_trash, skip_trash_dirs, trash_dir
 from version import get_version_info
 from workspace_models import TESTLOG_STATUS_ROLE, TESTLOG_TAGS_ROLE, WorkspaceFileSystemModel, WorkspaceSortProxyModel
 
@@ -1211,7 +1211,8 @@ class Indexer(threading.Thread):
 
     def run(self):
         files = []
-        for root, _, filenames in os.walk(self.workspace_dir):
+        for root, dirs, filenames in os.walk(self.workspace_dir):
+            skip_trash_dirs(self.workspace_dir, root, dirs)
             for name in filenames:
                 if name.endswith(".testlog"):
                     files.append(os.path.join(root, name))
@@ -1941,7 +1942,8 @@ class RecentFilesSwitcher(QDialog):
         if not self._workspace_dir or not os.path.isdir(self._workspace_dir):
             return []
         matches = []
-        for root, _, filenames in os.walk(self._workspace_dir):
+        for root, dirs, filenames in os.walk(self._workspace_dir):
+            skip_trash_dirs(self._workspace_dir, root, dirs)
             for filename in filenames:
                 if not filename.endswith(".testlog"):
                     continue
@@ -2569,6 +2571,7 @@ class MainWindow(QMainWindow):
         if path != self.workspace_dir and not self._flush_pending_changes():
             return
         self.workspace_dir = path
+        self._purge_workspace_trash()
         self.fs_model.setRootPath(path)
         if self._set_tree_workspace_root():
             self.tree.update()
@@ -2577,6 +2580,15 @@ class MainWindow(QMainWindow):
             self.settings.setValue("last_workspace", path)
             self._start_fulltext_indexing()
             self._open_most_recent_testlog()
+
+    def _purge_workspace_trash(self):
+        try:
+            purged = purge_trash(self.workspace_dir)
+        except Exception:
+            logger.exception("Could not purge Trash in %s", self.workspace_dir)
+            return
+        if purged:
+            logger.info("Purged %d item(s) older than 30 days from Trash in %s", len(purged), self.workspace_dir)
 
     def _set_tree_workspace_root(self):
         if not self.workspace_dir:
@@ -3027,6 +3039,7 @@ class MainWindow(QMainWindow):
         archive_dirs = {os.path.join(workspace_abs, name) for name in ("Archive", "Arkiv")}
         tags = set()
         for root, dirs, files in os.walk(workspace_abs):
+            skip_trash_dirs(workspace_abs, root, dirs)
             if root == workspace_abs:
                 dirs[:] = [name for name in dirs if os.path.join(workspace_abs, name) not in archive_dirs]
             for name in files:
@@ -4196,25 +4209,49 @@ class MainWindow(QMainWindow):
         line_edit.setCursorPosition(len(current_name))
 
     def delete_item(self, path):
+        # Outside Trash, Delete moves the item to Trash; inside it, Delete removes it for good.
+        if self.workspace_dir and os.path.normcase(os.path.abspath(path)) == os.path.normcase(trash_dir(self.workspace_dir)):
+            return
+        permanent = not self.workspace_dir or is_in_trash(self.workspace_dir, path)
         deleted_index = self.fs_proxy_model.mapFromSource(self.fs_model.index(path))
         replacement_path = self._replacement_file_path_after_delete(deleted_index, path)
         filename = os.path.basename(path)
-        answer = QMessageBox.question(
-            self,
-            self._tr("Confirm Delete"),
-            self._tr(
+        if permanent:
+            question = (
                 "Delete Folder {filename}? This cannot be undone."
                 if os.path.isdir(path)
                 else "Delete {filename}? This cannot be undone."
-            ).format(filename=filename),
+            )
+        else:
+            question = "Move folder {filename} to Trash?" if os.path.isdir(path) else "Move {filename} to Trash?"
+        answer = QMessageBox.question(
+            self,
+            self._tr("Confirm Delete"),
+            self._tr(question).format(filename=filename),
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
 
-        if os.path.isdir(path):
-            shutil.rmtree(path)
+        if permanent:
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
         else:
-            os.remove(path)
+            # Save the open note first so Trash holds its latest text.
+            if self.current_file and self._is_inside_folder(os.path.abspath(self.current_file), os.path.abspath(path)):
+                if not self._flush_pending_changes():
+                    return
+            try:
+                move_to_trash(self.workspace_dir, path)
+            except (TrashError, OSError):
+                logger.exception("Could not move %s to Trash", path)
+                QMessageBox.warning(
+                    self,
+                    self._tr("Confirm Delete"),
+                    self._tr("Could not move {name} to Trash.").format(name=filename),
+                )
+                return
 
         self._remove_tracked_paths(path)
         self._remove_fulltext_index_entries_for_path(path)
@@ -4506,6 +4543,7 @@ class MainWindow(QMainWindow):
                 recent_abs.endswith(".testlog")
                 and os.path.isfile(recent_abs)
                 and self._is_inside_folder(recent_abs, workspace_abs)
+                and not is_in_trash(workspace_abs, recent_abs)
                 and self.open_testlog(recent_abs)
             ):
                 return
@@ -4516,6 +4554,7 @@ class MainWindow(QMainWindow):
         latest_mtime = -1.0
 
         for root, dirs, files in os.walk(self.workspace_dir):
+            skip_trash_dirs(workspace_abs, root, dirs)
             if os.path.abspath(root) == workspace_abs:
                 dirs[:] = [name for name in dirs if os.path.join(workspace_abs, name) not in archive_dirs]
             for name in files:
