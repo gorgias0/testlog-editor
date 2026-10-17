@@ -1302,6 +1302,16 @@ def python_index_from_utf16(text, offset):
 WINDOWS_DRIVE_PATH_PATTERN = re.compile(r"^[A-Za-z]:(?:/|\\|%5[Cc])")
 
 
+TREE_NAVIGATION_KEYS = {
+    Qt.Key.Key_Up,
+    Qt.Key.Key_Down,
+    Qt.Key.Key_PageUp,
+    Qt.Key.Key_PageDown,
+    Qt.Key.Key_Home,
+    Qt.Key.Key_End,
+}
+
+
 class PreviewBareUrlLinkifier(HTMLParser):
     URL_PATTERN = re.compile(r"(?P<url>(?:https?|ftp)://[^\s<>()]+|mailto:[^\s<>()]+)")
     SKIP_TAGS = {"a", "code", "pre", "script", "style"}
@@ -3664,6 +3674,32 @@ class MainWindow(QMainWindow):
         self.tree.installEventFilter(self)
         self.tree.viewport().installEventFilter(self)
 
+        # Moving through the tree with the keyboard shows the highlighted note after a short
+        # pause, so arrowing quickly past notes does not open (and save) each one.
+        self.tree_preview_timer = QTimer(self)
+        self.tree_preview_timer.setSingleShot(True)
+        self.tree_preview_timer.setInterval(300)
+        self.tree_preview_timer.timeout.connect(self._preview_tree_selection)
+
+    def _preview_tree_selection(self):
+        if not self.tree.hasFocus():
+            return
+        index = self.tree.currentIndex()
+        if not index.isValid():
+            return
+        path = self.fs_model.filePath(self.fs_proxy_model.mapToSource(index))
+        if not path.endswith(".testlog") or not os.path.isfile(path):
+            return
+        if self.current_file and os.path.abspath(path) == os.path.abspath(self.current_file):
+            return
+        # An unsaved new note would raise the "save changes?" question while browsing; leave
+        # that to an explicit Enter or click.
+        if not self.current_file and self._editor_has_unsaved_changes() and self.editor.toPlainText().strip():
+            return
+        if not self._flush_pending_changes():
+            return
+        self.open_testlog(path, remember=False)
+
     def focus_sidebar_search(self):
         self.sidebar_search.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self.sidebar_search.selectAll()
@@ -3753,10 +3789,13 @@ class MainWindow(QMainWindow):
                         self.editor.setFocus(Qt.FocusReason.OtherFocusReason)
                     return True
             elif obj is self.tree:
+                if key in TREE_NAVIGATION_KEYS:
+                    self.tree_preview_timer.start()
                 if key == Qt.Key.Key_Menu:
                     self._open_keyboard_context_menu()
                     return True
                 if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.tree.currentIndex().isValid():
+                    self.tree_preview_timer.stop()
                     self._open_tree_index(self.tree.currentIndex())
                     return True
                 if key == Qt.Key.Key_Escape:
@@ -4972,6 +5011,8 @@ class MainWindow(QMainWindow):
         path = self.fs_model.filePath(source_index)
         if path.endswith(".testlog"):
             if self.current_file and os.path.abspath(path) == os.path.abspath(self.current_file):
+                # Clicking (or Enter on) a note that is only being previewed keeps it.
+                self._add_to_recent(path)
                 return
             if not self._flush_pending_changes():
                 return
@@ -5183,7 +5224,7 @@ class MainWindow(QMainWindow):
                 return
             self.open_testlog(path)
 
-    def open_testlog(self, path):
+    def open_testlog(self, path, remember=True):
         self.autosave_timer.stop()
         self.close_find_bar()
         try:
@@ -5216,7 +5257,10 @@ class MainWindow(QMainWindow):
         self.update_preview()
         self.setWindowTitle(self._window_title(os.path.basename(path)))
         self._select_file_in_tree(path)
-        self._add_to_recent(path)
+        # A note shown by arrowing through the tree only becomes "recent" once it is edited,
+        # clicked or opened with Enter, so browsing does not flood the recent-files list.
+        if remember:
+            self._add_to_recent(path)
         return True
 
     def _select_file_in_tree(self, path, retry_attempts=0):
@@ -5308,6 +5352,7 @@ class MainWindow(QMainWindow):
         note_content = set_testlog_status(self.editor.toPlainText(), self.current_status)
         write_testlog_archive(path, note_content, self.images_dir)
         self._save_failure_reported = False
+        self._add_to_recent(path)
         self.editor.document().setModified(False)
         self.autosave_timer.stop()
         self._update_fulltext_index_for_file(path)

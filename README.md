@@ -5,7 +5,7 @@ A local-first desktop Markdown editor for `.testlog` files, built with PySide6.
 ## Highlights
 
 - Workspace-first flow with a searchable file tree, pinned files, and last-workspace restore
-- Keyboard navigation in the sidebar: Ctrl+L focuses the file search (↓ moves into the list, Enter opens the first match), Ctrl+0 or Alt+← focuses the file tree (arrows move, Enter opens a note or toggles a folder, Esc or Alt+→ returns to the editor), F2 renames, Delete moves to Trash, and the Menu key or Shift+F10 opens the item's context menu
+- Keyboard navigation in the sidebar: Ctrl+L focuses the file search (↓ moves into the list, Enter opens the first match), Ctrl+0 or Alt+← focuses the file tree (arrows move and show the highlighted note after a short pause, Enter opens it in the editor or toggles a folder, Esc or Alt+→ returns to the editor), F2 renames, Delete moves to Trash, and the Menu key or Shift+F10 opens the item's context menu
 - Status (todo/doing/done) and tags per note; type `#tag` in the sidebar search to show only notes with that tag, across folders
 - Deleted notes and folders go to a Trash folder (Papperskorg in Swedish) at the bottom of the sidebar, where they can be restored; anything left untouched in Trash for 30 days is removed when the workspace is opened
 - Text tools for exploratory testing like; generate test data, lorem ipsum, count chars, pretty-print JSON/HTML, convert to Base64 etc.
