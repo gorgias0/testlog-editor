@@ -3163,6 +3163,10 @@ class MainWindow(QMainWindow):
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
         self.delete_tree_item_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.tree)
         self.delete_tree_item_shortcut.activated.connect(self.delete_selected_tree_item)
+        # Only while the tree has focus, so F2 in the editor never renames a file.
+        self.rename_tree_item_shortcut = QShortcut(QKeySequence(Qt.Key.Key_F2), self.tree)
+        self.rename_tree_item_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.rename_tree_item_shortcut.activated.connect(self.rename_selected_tree_item)
         sidebar_layout.addWidget(self.tree)
 
         sidebar.setMinimumWidth(200)
@@ -3931,17 +3935,26 @@ class MainWindow(QMainWindow):
         elif chosen == archive_action:
             self.archive_item(path)
 
-    def delete_selected_tree_item(self):
+    def _selected_tree_item_path(self):
         index = self.tree.currentIndex()
         if not index.isValid():
-            return
+            return None
 
         source_index = self.fs_proxy_model.mapToSource(index)
         path = self.fs_model.filePath(source_index)
         is_file = path.endswith(".testlog") and os.path.isfile(path)
         is_dir = os.path.isdir(path)
-        if is_file or is_dir:
+        return path if is_file or is_dir else None
+
+    def delete_selected_tree_item(self):
+        path = self._selected_tree_item_path()
+        if path:
             self.delete_item(path)
+
+    def rename_selected_tree_item(self):
+        path = self._selected_tree_item_path()
+        if path:
+            self.rename_item(path)
 
     def set_file_status(self, path, status):
         normalized_status = normalize_testlog_status(status)
