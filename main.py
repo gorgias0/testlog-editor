@@ -1389,7 +1389,7 @@ class FullTextSearchDialog(QDialog):
         frame_layout.setSpacing(0)
 
         self.search_input = QLineEdit(self)
-        self.search_input.setPlaceholderText("Sök i alla dokument...")
+        self.search_input.setPlaceholderText(self._tr("Search all documents..."))
         frame_layout.addWidget(self.search_input)
 
         self.status_label = QLabel(self)
@@ -1503,7 +1503,12 @@ class FullTextSearchDialog(QDialog):
             f"background: {colors['status_bg']}; font-size: 12px;"
         )
 
+    def _tr(self, text):
+        parent = self.parent()
+        return parent._tr(text) if parent is not None and hasattr(parent, "_tr") else text
+
     def open_for_workspace(self, workspace_dir, index, indexing_active=False, progress=None):
+        self.search_input.setPlaceholderText(self._tr("Search all documents..."))
         self._workspace_dir = workspace_dir
         self._index = dict(index or {})
         parent = self.parent()
@@ -1573,7 +1578,7 @@ class FullTextSearchDialog(QDialog):
     def _set_indexing_status(self, indexing_active, progress):
         if indexing_active:
             current, total = progress
-            self.status_label.setText(f"Indexerar... ({current}/{total})")
+            self.status_label.setText(self._tr("Indexing... ({current}/{total})").format(current=current, total=total))
             self.status_label.show()
             return
         self.status_label.hide()
@@ -1851,7 +1856,7 @@ class RecentFilesSwitcher(QDialog):
         frame_layout.setSpacing(0)
 
         self.search_field = QLineEdit(self)
-        self.search_field.setPlaceholderText("Öppna fil...")
+        self.search_field.setPlaceholderText(self._tr("Open file..."))
         frame_layout.addWidget(self.search_field)
 
         self.results_list = QListWidget(self)
@@ -1952,7 +1957,12 @@ class RecentFilesSwitcher(QDialog):
         """)
         self.results_list.viewport().update()
 
+    def _tr(self, text):
+        parent = self.parent()
+        return parent._tr(text) if parent is not None and hasattr(parent, "_tr") else text
+
     def open_for_workspace(self, workspace_dir):
+        self.search_field.setPlaceholderText(self._tr("Open file..."))
         self._workspace_dir = workspace_dir
         parent = self.parent()
         if parent is not None and hasattr(parent, "_show_modal_overlay"):
@@ -2012,7 +2022,8 @@ class RecentFilesSwitcher(QDialog):
         if key == Qt.Key.Key_Up:
             self._move_selection(-1)
             return True
-        if key in (
+        # Alt+1..8 opens the Nth row; plain digits are typed, so names like "2026-10-17 smoke" can be searched.
+        if event.modifiers() == Qt.KeyboardModifier.AltModifier and key in (
             Qt.Key.Key_1,
             Qt.Key.Key_2,
             Qt.Key.Key_3,
@@ -2022,9 +2033,8 @@ class RecentFilesSwitcher(QDialog):
             Qt.Key.Key_7,
             Qt.Key.Key_8,
         ):
-            if not self.search_field.text():
-                self._open_at_index(int(key) - int(Qt.Key.Key_1))
-                return True
+            self._open_at_index(int(key) - int(Qt.Key.Key_1))
+            return True
         return False
 
     def update_list(self):
@@ -2080,7 +2090,7 @@ class RecentFilesSwitcher(QDialog):
         if not path or not os.path.exists(path) or not path.endswith(".testlog"):
             return None
         workspace_dir = self._workspace_dir
-        if workspace_dir and os.path.commonpath([os.path.abspath(workspace_dir), os.path.abspath(path)]) == os.path.abspath(workspace_dir):
+        if workspace_dir and MainWindow._is_inside_folder(os.path.abspath(path), os.path.abspath(workspace_dir)):
             relative_path = os.path.relpath(path, workspace_dir)
         else:
             relative_path = path
@@ -3430,6 +3440,7 @@ class MainWindow(QMainWindow):
             file_icon=file_icon,
         )
         self.fs_model.trash_icon = icon_from_svg(TRASH_ICON_SVG, size=20)
+        self.fs_model.translate = self._tr
         self.fs_proxy_model = WorkspaceSortProxyModel(self.fs_model, self.pinned_paths, self)
         self.fs_model.setNameFilters(["*.testlog"])
         self.fs_model.setNameFilterDisables(True)  # Visar mappar, gråar ut andra filer

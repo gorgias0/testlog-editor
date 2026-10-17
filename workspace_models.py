@@ -59,6 +59,8 @@ class WorkspaceFileSystemModel(QFileSystemModel):
         self.trash_label = TRASH_DIR_NAME
         self.trash_icon = None
         self.archive_label = ARCHIVE_DIR_NAME
+        # Set by the window to its translation function; the tooltip follows the UI language.
+        self.translate = lambda text: text
 
     def _is_workspace_child(self, path, name):
         root = self.rootPath()
@@ -129,14 +131,13 @@ class WorkspaceFileSystemModel(QFileSystemModel):
         created = self._format_datetime(file_info.birthTime())
 
         status, tags = self._header_for_path(path)
-        tags_line = f"Taggar:   {format_testlog_tags(tags)}\n" if tags else ""
-        return (
-            f"Status:   {TESTLOG_STATUS_LABELS[status]}\n"
-            f"{tags_line}"
-            f"Ändrad:   {modified}\n"
-            f"Skapad:   {created}\n"
-            f"Storlek:  {size_str}"
-        )
+        tr = self.translate
+        rows = [(tr("Status"), tr(TESTLOG_STATUS_LABELS[status]))]
+        if tags:
+            rows.append((tr("Tags"), format_testlog_tags(tags)))
+        rows += [(tr("Modified"), modified), (tr("Created"), created or tr("Not available")), (tr("Size"), size_str)]
+        label_width = max(len(label) for label, _ in rows) + 2
+        return "\n".join(f"{label + ':':<{label_width}}{value}" for label, value in rows)
 
     def refresh_status(self, path):
         self._header_cache.pop(path, None)
@@ -172,7 +173,7 @@ class WorkspaceFileSystemModel(QFileSystemModel):
     @staticmethod
     def _format_datetime(date_time):
         if not date_time.isValid():
-            return "Ej tillgänglig"
+            return ""
         return date_time.toString("yyyy-MM-dd HH:mm")
 
 

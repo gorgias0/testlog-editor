@@ -1105,9 +1105,10 @@ class TextToolDialog(QDialog):
             digits = re.sub(r"\D", "", compact)
             if digits:
                 return f"{country_code} {digits}"
-        if compact.startswith(country_code):
+        if compact.startswith("+"):
             return compact
-        return compact
+        # Norway, Denmark and Iceland have no leading 0 to replace; the code still goes in front.
+        return f"{country_code} {compact}"
 
     def _normalize_email_name(self, text):
         translation = str.maketrans({

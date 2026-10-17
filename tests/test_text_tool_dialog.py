@@ -137,3 +137,12 @@ def test_pretty_print_html_closes_implied_list_items():
     assert pretty_print_html("<ul><li>a<li>b</ul><p>after</p>") == (
         "<ul>\n  <li>\n    a\n  <li>\n    b\n</ul>\n<p>\n  after\n</p>"
     )
+
+
+def test_international_phone_adds_country_code_without_leading_zero():
+    dialog = TextToolDialog.__new__(TextToolDialog)
+
+    assert dialog._to_international_phone("22 60 97 22", "+47") == "+47 22 60 97 22"
+    assert dialog._to_international_phone("621-7827", "+354") == "+354 621-7827"
+    assert dialog._to_international_phone("08-123 456", "+46") == "+46 8-123 456"
+    assert dialog._to_international_phone("+45 12 34 56 78", "+45") == "+45 12 34 56 78"
