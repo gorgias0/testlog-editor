@@ -7,6 +7,7 @@ import zipfile
 from testlog_utils import (
     collect_referenced_image_filenames,
     set_testlog_status,
+    set_testlog_tags,
     strip_testlog_front_matter,
 )
 
@@ -99,6 +100,15 @@ def write_testlog_archive(path, note_content, images_dir):
 
 
 def rewrite_testlog_status(path, status):
+    rewrite_testlog_note(path, lambda note_content: set_testlog_status(note_content, status))
+
+
+def rewrite_testlog_tags(path, tags):
+    rewrite_testlog_note(path, lambda note_content: set_testlog_tags(note_content, tags))
+
+
+def rewrite_testlog_note(path, update_fn):
+    # Rewrite note.md of a file that is not open in the editor, keeping every other entry.
     entries = []
     note_content = ""
     with zipfile.ZipFile(path, "r") as zf:
@@ -108,7 +118,7 @@ def rewrite_testlog_status(path, status):
                 continue
             entries.append((info, zf.read(info.filename)))
 
-    note_content = set_testlog_status(note_content, status)
+    note_content = update_fn(note_content)
 
     def write(target):
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:

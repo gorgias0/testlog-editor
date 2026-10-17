@@ -12,9 +12,10 @@ from testlog_archive import (
     extract_testlog_archive,
     read_testlog_note_text,
     rewrite_testlog_status,
+    rewrite_testlog_tags,
     write_testlog_archive,
 )
-from testlog_utils import get_testlog_status, set_testlog_status
+from testlog_utils import get_testlog_status, get_testlog_tags, set_testlog_status
 
 
 def _images_dir(tmp_path, *names):
@@ -184,3 +185,17 @@ def test_extract_testlog_archive_rejects_invalid_utf8_note(tmp_path):
         extract_testlog_archive(str(path))
 
     assert _session_dirs() == before
+
+
+def test_rewrite_testlog_tags_keeps_images_and_status(tmp_path):
+    images_dir = _images_dir(tmp_path, "shot.png")
+    path = tmp_path / "note.testlog"
+    write_testlog_archive(str(path), set_testlog_status("![a](images/shot.png)\n", "doing"), str(images_dir))
+
+    rewrite_testlog_tags(str(path), "TD, meet")
+
+    with zipfile.ZipFile(path) as zf:
+        note = zf.read("note.md").decode("utf-8")
+        assert set(zf.namelist()) == {"note.md", "images/shot.png"}
+    assert get_testlog_tags(note) == ["td", "meet"]
+    assert get_testlog_status(note) == "doing"
