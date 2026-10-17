@@ -18,7 +18,8 @@ How to see it working: run `python -m pytest` and see new tests for each of the 
 
 - [x] (2026-10-17) Created `.venv` in the WSL clone (with `uv venv` + `uv pip install -r requirements.txt`; the plain `python3 -m venv` route works as well). Baseline: 53 passed.
 - [x] (2026-10-17) Milestone 1: `testlog_archive.py` created (`read_testlog_note_text`, `write_testlog_archive`, `rewrite_testlog_status`); `main.py` `_write_testlog` and `_write_status_to_testlog` now call it; `collect_referenced_image_filenames` returns raw and decoded names; `tests/test_testlog_archive.py` added (3 tests). 56 passed. Smoke-tested through a real `MainWindow` (offscreen).
-- [ ] Milestone 2: make every archive write atomic (temp file + `os.replace`), keeping file permissions.
+- [x] (2026-10-17) Milestone 1 committed as `cc6e1e8`.
+- [x] (2026-10-17) Milestone 2: `_atomic_replace` in `testlog_archive.py`, used by `write_testlog_archive` and `rewrite_testlog_status`; existing permissions kept, new files get `0o666 & ~umask`. 5 tests added; 61 passed. The two failure tests fail against the Milestone 1 code (`2 failed, 6 passed`) and pass now. Real-window smoke test: file is `-rw-r--r--`, no `.tmp` left.
 - [ ] Milestone 3: make opening a file safe (extract into a fresh folder first, swap only on success).
 - [ ] Milestone 4: refuse rename/move onto an existing file.
 - [ ] Milestone 5: report errors to the user and to a log file.
@@ -32,6 +33,8 @@ How to see it working: run `python -m pytest` and see new tests for each of the 
 - Observation: images already dropped from existing files by this bug cannot be recovered by this plan; the fix only stops further loss.
 - Observation: PySide6 hands an exception raised inside a slot to `sys.excepthook`, so one hook covers every timer, menu and button handler. The prototype in `Concrete Steps` was run during planning.
   Evidence: `PySide6 6.12.0 hook saw: ['ZeroDivisionError']` (offscreen, Python 3.12, 2026-10-17).
+- Observation: on Windows, `os.replace` raises `PermissionError` if another program (a sync client or virus scanner) holds the target open. The old file stays intact, which is the point of the change, but the save fails. Milestone 5's save-failure reporting is what makes this visible; retrying is left to the next autosave.
+  Evidence: documented `os.replace` behaviour on Windows; not reproduced here (WSL only).
 
 
 ## Decision Log
@@ -48,6 +51,9 @@ How to see it working: run `python -m pytest` and see new tests for each of the 
 - Decision: the temporary file used for an atomic write lives in the same folder as the target, is named `.<target name>.<random>.tmp`, and is deleted if anything fails.
   Rationale: `os.replace` is only atomic within one filesystem, so the temporary file must sit next to the target. The leading dot and the `.tmp` suffix keep it out of the sidebar tree and the full-text index, which only show files ending in `.testlog` (`self.fs_model.setNameFilters(["*.testlog"])` and the `name.endswith(".testlog")` checks in `main.py`).
   Date/Author: 2026-10-17 / Claude.
+- Decision: a brand-new file gets mode `0o666 & ~umask`, not the `0o600` that `mkstemp` gives.
+  Rationale: the plan only covered keeping an existing file's mode; without this, every newly created note (save as, rename of the open note) would become owner-only, unlike before. The umask is read with the usual set-and-restore `os.umask` pair, which is only done on the GUI thread.
+  Date/Author: 2026-10-17 / Claude.
 - Decision: a rename or move whose target already exists is refused, not auto-renamed to `name 2.testlog`.
   Rationale: the user typed or picked that name deliberately; silently choosing another name would surprise them. The `archive_item` action keeps its existing auto-numbering because there the user did not choose the target name.
   Date/Author: 2026-10-17 / Claude.
@@ -58,7 +64,7 @@ How to see it working: run `python -m pytest` and see new tests for each of the 
 
 ## Outcomes & Retrospective
 
-Milestone 1 (2026-10-17): images inserted from files with spaces or non-ASCII letters in their names now survive saving. The archive code is in `testlog_archive.py` and covered by tests. `_write_testlog` no longer writes `note.md` into the session folder (it uses `writestr`); nothing else read that copy. Milestones 2-5 remain.
+Milestone 1 (2026-10-17): images inserted from files with spaces or non-ASCII letters in their names now survive saving. The archive code is in `testlog_archive.py` and covered by tests. `_write_testlog` no longer writes `note.md` into the session folder (it uses `writestr`); nothing else read that copy. Milestone 2 (2026-10-17): every write of a `.testlog` file now goes through a temporary file in the same folder and `os.replace`, so an interrupted save leaves the previous version readable. Milestones 3-5 remain.
 
 
 ## Context and Orientation

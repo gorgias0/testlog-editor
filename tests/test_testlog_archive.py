@@ -1,4 +1,9 @@
+import os
+import stat
+import sys
 import zipfile
+
+import pytest
 
 from testlog_archive import read_testlog_note_text, rewrite_testlog_status, write_testlog_archive
 from testlog_utils import get_testlog_status, set_testlog_status
@@ -43,3 +48,77 @@ def test_read_testlog_note_text_returns_none_for_non_zip_file(tmp_path):
     path.write_text("hello", encoding="utf-8")
 
     assert read_testlog_note_text(str(path)) is None
+
+
+def _temp_files(directory):
+    return [name for name in os.listdir(directory) if name.endswith(".tmp")]
+
+
+def test_write_testlog_archive_leaves_no_temp_file(tmp_path):
+    images_dir = _images_dir(tmp_path)
+    path = tmp_path / "note.testlog"
+
+    write_testlog_archive(str(path), "first", str(images_dir))
+    write_testlog_archive(str(path), "second", str(images_dir))
+
+    assert _temp_files(tmp_path) == []
+    assert read_testlog_note_text(str(path)) == "second"
+
+
+def test_failed_write_keeps_original_file(tmp_path, monkeypatch):
+    images_dir = _images_dir(tmp_path)
+    path = tmp_path / "note.testlog"
+    write_testlog_archive(str(path), "original", str(images_dir))
+    original_bytes = path.read_bytes()
+
+    def fail(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(zipfile.ZipFile, "writestr", fail)
+    with pytest.raises(OSError, match="disk full"):
+        write_testlog_archive(str(path), "replacement", str(images_dir))
+
+    assert path.read_bytes() == original_bytes
+    assert _temp_files(tmp_path) == []
+
+
+def test_failed_status_rewrite_keeps_original_file(tmp_path, monkeypatch):
+    images_dir = _images_dir(tmp_path, "shot.png")
+    path = tmp_path / "note.testlog"
+    write_testlog_archive(str(path), set_testlog_status("![a](images/shot.png)\n", "todo"), str(images_dir))
+    original_bytes = path.read_bytes()
+
+    def fail(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(zipfile.ZipFile, "writestr", fail)
+    with pytest.raises(OSError):
+        rewrite_testlog_status(str(path), "done")
+
+    assert path.read_bytes() == original_bytes
+    assert _temp_files(tmp_path) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_rewrite_keeps_file_permissions(tmp_path):
+    images_dir = _images_dir(tmp_path)
+    path = tmp_path / "note.testlog"
+    write_testlog_archive(str(path), "first", str(images_dir))
+    os.chmod(path, 0o640)
+
+    write_testlog_archive(str(path), "second", str(images_dir))
+
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_new_file_gets_default_permissions(tmp_path):
+    images_dir = _images_dir(tmp_path)
+    path = tmp_path / "note.testlog"
+    umask = os.umask(0o022)
+    try:
+        write_testlog_archive(str(path), "first", str(images_dir))
+    finally:
+        os.umask(umask)
+
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o644
