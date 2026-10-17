@@ -4091,9 +4091,9 @@ class MainWindow(QMainWindow):
         if not self.workspace_dir or not path.endswith(".testlog") or not os.path.isfile(path):
             return
 
-        if self.current_file and os.path.abspath(path) == os.path.abspath(self.current_file):
-            if not self._flush_pending_changes():
-                return
+        was_open = bool(self.current_file) and os.path.abspath(path) == os.path.abspath(self.current_file)
+        if was_open and not self._flush_pending_changes():
+            return
 
         archive_dir = os.path.join(self.workspace_dir, self._archive_folder_name())
         os.makedirs(archive_dir, exist_ok=True)
@@ -4102,12 +4102,43 @@ class MainWindow(QMainWindow):
         if os.path.abspath(new_path) == os.path.abspath(path):
             return
 
+        # Look up the neighbour before the move, while the archived file is still in the tree.
+        next_path = self._next_file_in_same_folder(path)
         new_path = self._available_path(new_path)
         os.rename(path, new_path)
         self._update_tracked_paths(path, new_path)
         self.refresh_pinned()
-        self._select_file_in_tree(new_path, retry_attempts=6)
+
+        # Stay in the current folder instead of revealing the file inside the archive folder.
+        if was_open:
+            if next_path:
+                self.open_testlog(next_path)
+            else:
+                self.current_file = None
+                self.editor.clear()
+                self.tree.clearSelection()
+                self.setWindowTitle(self._window_title())
+        elif next_path:
+            self._select_file_in_tree(next_path)
+        else:
+            self.tree.clearSelection()
         self._start_fulltext_indexing()
+
+    def _next_file_in_same_folder(self, path):
+        index = self.fs_proxy_model.mapFromSource(self.fs_model.index(path))
+        if not index.isValid():
+            return None
+
+        parent = index.parent()
+        row = index.row()
+        row_count = self.fs_proxy_model.rowCount(parent)
+        # Prefer the file below in the tree's current sort order, then the one above.
+        for candidate_row in [*range(row + 1, row_count), *range(row - 1, -1, -1)]:
+            source_index = self.fs_proxy_model.mapToSource(self.fs_proxy_model.index(candidate_row, 0, parent))
+            candidate_path = self.fs_model.filePath(source_index)
+            if candidate_path.endswith(".testlog") and os.path.isfile(candidate_path):
+                return candidate_path
+        return None
 
     @staticmethod
     def _path_taken_by_other_item(path, new_path):
