@@ -27,3 +27,18 @@ def test_pretty_print_json_like_closes_missing_containers():
         '  ]\n'
         '}'
     )
+
+
+def test_best_effort_keeps_spaces_inside_single_quoted_strings():
+    formatted, valid, _ = format_json_best_effort("{'name': 'John Smith', 'note': 'a b c'}")
+
+    assert valid is False
+    assert formatted == "{\n  'name': 'John Smith',\n  'note': 'a b c'\n}"
+
+
+def test_best_effort_keeps_one_space_between_bare_words():
+    assert pretty_print_json_like("{a: hello   world}") == "{\n  a: hello world\n}"
+
+
+def test_best_effort_does_not_add_a_bracket_after_a_mismatched_closer():
+    assert pretty_print_json_like("[1, 2}") == "[\n  1,\n  2\n}"

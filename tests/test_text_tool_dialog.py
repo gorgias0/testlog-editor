@@ -121,3 +121,19 @@ def _luhn_valid(digits):
                 value -= 9
         total += value
     return total % 10 == 0
+
+
+def test_pretty_print_html_keeps_cdata():
+    assert pretty_print_html("<svg><![CDATA[ keep me ]]></svg>") == "<svg>\n  <![CDATA[ keep me ]]>\n</svg>"
+
+
+def test_pretty_print_html_keeps_pre_content_as_written():
+    html = "<div><pre>x <b>y</b>\n  z</pre></div>"
+
+    assert pretty_print_html(html) == "<div>\n  <pre>x <b>y</b>\n  z</pre>\n</div>"
+
+
+def test_pretty_print_html_closes_implied_list_items():
+    assert pretty_print_html("<ul><li>a<li>b</ul><p>after</p>") == (
+        "<ul>\n  <li>\n    a\n  <li>\n    b\n</ul>\n<p>\n  after\n</p>"
+    )
