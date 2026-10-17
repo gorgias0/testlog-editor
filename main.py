@@ -4319,14 +4319,39 @@ class MainWindow(QMainWindow):
         if path.endswith(".testlog") and os.path.isfile(path):
             self.rename_item(path)
 
+    @staticmethod
+    def _is_inside_folder(path, folder):
+        try:
+            return os.path.commonpath([folder, path]) == folder
+        except ValueError:
+            # Different drives on Windows.
+            return False
+
     def _open_most_recent_testlog(self):
         if not self.workspace_dir:
             return
 
+        # Reopen the note that was open last; modification times also change on status
+        # changes and archiving, so they are only a fallback for a workspace with no history.
+        workspace_abs = os.path.abspath(self.workspace_dir)
+        for recent_path in self._recent_files():
+            recent_abs = os.path.abspath(recent_path)
+            if (
+                recent_abs.endswith(".testlog")
+                and os.path.isfile(recent_abs)
+                and self._is_inside_folder(recent_abs, workspace_abs)
+                and self.open_testlog(recent_abs)
+            ):
+                return
+
+        # Both names, since the archive folder follows the UI language.
+        archive_dirs = {os.path.join(workspace_abs, name) for name in ("Archive", "Arkiv")}
         latest_path = None
         latest_mtime = -1.0
 
-        for root, _, files in os.walk(self.workspace_dir):
+        for root, dirs, files in os.walk(self.workspace_dir):
+            if os.path.abspath(root) == workspace_abs:
+                dirs[:] = [name for name in dirs if os.path.join(workspace_abs, name) not in archive_dirs]
             for name in files:
                 if not name.endswith(".testlog"):
                     continue
