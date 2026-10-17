@@ -24,9 +24,9 @@ from PySide6.QtWidgets import (
     QLineEdit, QStyle, QSizePolicy, QToolButton,
     QDialog, QDialogButtonBox, QFormLayout, QCheckBox,
     QListWidget, QListWidgetItem, QGraphicsDropShadowEffect,
-    QStyledItemDelegate, QStyleOptionViewItem,
+    QStyledItemDelegate, QStyleOptionViewItem, QCompleter,
 )
-from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, Signal, QItemSelectionModel, QSize, QPoint, QFileInfo, QRect
+from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, Signal, QItemSelectionModel, QSize, QPoint, QFileInfo, QRect, QStringListModel
 from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QTextBlockFormat, QIntValidator, QShortcut, QColor, QTextCharFormat, QSyntaxHighlighter, QDesktopServices, QPainter, QPalette
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineContextMenuRequest, QWebEnginePage, QWebEngineSettings
@@ -51,19 +51,24 @@ from testlog_archive import (
     extract_testlog_archive,
     read_testlog_note_text,
     rewrite_testlog_status,
+    rewrite_testlog_tags,
     TestlogArchiveError,
     write_testlog_archive,
 )
 from testlog_utils import (
     build_fulltext_search_results,
     DEFAULT_TESTLOG_STATUS,
+    format_testlog_tags,
     get_testlog_status,
+    get_testlog_tags,
     guess_markdown_from_plain_text,
     highlight_fulltext_snippet,
     normalize_testlog_status,
+    normalize_testlog_tags,
     read_testlog_status_from_archive,
     resolve_preview_image_path,
     set_testlog_status,
+    set_testlog_tags,
     suggest_filename_from_heading,
     strip_testlog_front_matter,
     TESTLOG_STATUS_LABELS,
@@ -1997,6 +2002,25 @@ class RecentFilesSwitcher(QDialog):
         self.accept()
 
 
+class TagLineEdit(QLineEdit):
+    focused = Signal()
+
+    def focusInEvent(self, event):
+        self.focused.emit()
+        super().focusInEvent(event)
+
+
+class TagCompleter(QCompleter):
+    # Completes only the tag being typed in a comma or space separated list, not the whole field.
+    def splitPath(self, path):
+        return [re.split(r"[,\s]+", path)[-1]]
+
+    def pathFromIndex(self, index):
+        text = self.widget().text()
+        typed = re.search(r"[^,\s]*$", text)
+        return f"{text[:typed.start()]}{super().pathFromIndex(index)}, "
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -2894,6 +2918,16 @@ class MainWindow(QMainWindow):
         self.toolbar.addWidget(self.status_combo)
         self._set_status_combo(self.current_status)
 
+        self.tags_edit = TagLineEdit()
+        self.tags_edit.setFixedWidth(180)
+        self.tags_completer = TagCompleter(self.tags_edit)
+        self.tags_completer.setModel(QStringListModel(self.tags_completer))
+        self.tags_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.tags_edit.setCompleter(self.tags_completer)
+        self.tags_edit.focused.connect(self._refresh_tag_suggestions)
+        self.tags_edit.editingFinished.connect(self._on_tags_edit_finished)
+        self.toolbar.addWidget(self.tags_edit)
+
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.toolbar.addWidget(spacer)
@@ -2958,6 +2992,46 @@ class MainWindow(QMainWindow):
             self.editor.document().setModified(True)
             self.timer.start()
             self.autosave_timer.start()
+
+    def _on_tags_edit_finished(self):
+        tags = normalize_testlog_tags(self.tags_edit.text())
+        self.tags_edit.setText(format_testlog_tags(tags))
+        current_text = self.editor.toPlainText()
+        if tags == get_testlog_tags(current_text):
+            return
+
+        self._replace_editor_text_preserving_cursor(set_testlog_tags(current_text, tags))
+        self.editor.document().setModified(True)
+        self.timer.start()
+        self.autosave_timer.start()
+
+    def _sync_tags_from_editor(self):
+        # Follow edits to the header, but never overwrite the field while the user types in it.
+        if not hasattr(self, "tags_edit") or self.tags_edit.hasFocus():
+            return
+        text = format_testlog_tags(get_testlog_tags(self.editor.toPlainText()))
+        if self.tags_edit.text() != text:
+            self.tags_edit.blockSignals(True)
+            self.tags_edit.setText(text)
+            self.tags_edit.blockSignals(False)
+
+    def _refresh_tag_suggestions(self):
+        self.tags_completer.model().setStringList(self._known_workspace_tags())
+
+    def _known_workspace_tags(self):
+        if not self.workspace_dir or not os.path.isdir(self.workspace_dir):
+            return []
+
+        workspace_abs = os.path.abspath(self.workspace_dir)
+        archive_dirs = {os.path.join(workspace_abs, name) for name in ("Archive", "Arkiv")}
+        tags = set()
+        for root, dirs, files in os.walk(workspace_abs):
+            if root == workspace_abs:
+                dirs[:] = [name for name in dirs if os.path.join(workspace_abs, name) not in archive_dirs]
+            for name in files:
+                if name.endswith(".testlog"):
+                    tags.update(self.fs_model.tags_for_path(os.path.join(root, name)))
+        return sorted(tags)
 
     def show_about(self):
         info = get_version_info()
@@ -3047,6 +3121,7 @@ class MainWindow(QMainWindow):
         self.english_action.setText(self._tr("English"))
         self.swedish_action.setText(self._tr("Swedish"))
         self.about_action.setText(self._tr("About TestLog Editor"))
+        self.tags_edit.setPlaceholderText(self._tr("Tags"))
         self.english_action.setChecked(self.current_language == "en")
         self.swedish_action.setChecked(self.current_language == "sv")
 
@@ -3270,6 +3345,7 @@ class MainWindow(QMainWindow):
         self.editor.textChanged.connect(self.autosave_timer.start)
         self.editor.textChanged.connect(self._update_editor_counts)
         self.editor.textChanged.connect(self._sync_status_from_editor)
+        self.editor.textChanged.connect(self._sync_tags_from_editor)
         self.editor.cursorPositionChanged.connect(self._update_editor_counts)
         self.editor.verticalScrollBar().valueChanged.connect(self._sync_preview_scroll)
 
@@ -3944,12 +4020,14 @@ class MainWindow(QMainWindow):
                 action.setCheckable(True)
                 action.setChecked(status == current_status)
                 status_actions[action] = status
+            tags_action = menu.addAction(self._tr("Tags..."))
             menu.addSeparator()
             pin_action = menu.addAction(self._tr("Unpin") if path in self.pinned_paths else self._tr("Pin to Top"))
             menu.addSeparator()
             archive_action = menu.addAction(self._tr("Archive"))
         else:
             status_actions = {}
+            tags_action = None
             pin_action = None
             archive_action = None
 
@@ -3962,6 +4040,8 @@ class MainWindow(QMainWindow):
             self.move_item(path)
         elif chosen in status_actions:
             self.set_file_status(path, status_actions[chosen])
+        elif chosen == tags_action:
+            self.edit_file_tags(path)
         elif chosen == pin_action:
             self.toggle_pin(path)
         elif chosen == archive_action:
@@ -4014,6 +4094,42 @@ class MainWindow(QMainWindow):
 
     def _write_status_to_testlog(self, path, status):
         rewrite_testlog_status(path, status)
+
+    def _is_open_file(self, path):
+        return bool(self.current_file) and os.path.abspath(path) == os.path.abspath(self.current_file)
+
+    def edit_file_tags(self, path):
+        current = get_testlog_tags(self.editor.toPlainText()) if self._is_open_file(path) else self.fs_model.tags_for_path(path)
+        text, accepted = QInputDialog.getText(
+            self,
+            self._tr("Tags"),
+            self._tr("Tags (comma-separated):"),
+            text=format_testlog_tags(current),
+        )
+        if accepted:
+            self.set_file_tags(path, text)
+
+    def set_file_tags(self, path, tags):
+        normalized_tags = normalize_testlog_tags(tags)
+        if not path.endswith(".testlog") or not os.path.isfile(path):
+            return False
+
+        if self._is_open_file(path):
+            updated_text = set_testlog_tags(self.editor.toPlainText(), normalized_tags)
+            if updated_text != self.editor.toPlainText():
+                self._replace_editor_text_preserving_cursor(updated_text)
+            return self.save_file()
+
+        try:
+            rewrite_testlog_tags(path, normalized_tags)
+        except Exception:
+            logger.exception("Could not change tags of %s", path)
+            self.statusBar().showMessage(self._tr("Could not save {name}").format(name=os.path.basename(path)))
+            return False
+        self._update_fulltext_index_for_file(path)
+        self.fs_model.refresh_status(path)
+        self._refresh_sidebar_sort()
+        return True
 
     def rename_item(self, path):
         current_name = Path(path).name if os.path.isdir(path) else Path(path).stem

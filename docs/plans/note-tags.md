@@ -19,7 +19,8 @@ Sorting the tree by tag was discussed and deliberately left out of this plan (se
 - [x] (2026-10-17) Milestone 1: `normalize_testlog_tags`, `format_testlog_tags`, `get_testlog_tags`, `set_testlog_tags`, `read_testlog_header_from_archive` in `testlog_utils.py` (`read_testlog_status_from_archive` now wraps the header reader); `rewrite_testlog_note` and `rewrite_testlog_tags` in `testlog_archive.py` (`rewrite_testlog_status` now uses `rewrite_testlog_note`). 20 tests added; 97 passed.
 - [x] (2026-10-17) Milestone 1 committed as `2a715f9`.
 - [x] (2026-10-17) Milestone 2: `TESTLOG_TAGS_ROLE`, header cache (`_header_for_path`, `tags_for_path`), tags in the tooltip, `parse_sidebar_search` and `sidebar_search_matches` in `workspace_models.py`; tags drawn in `WorkspaceTreeItemDelegate`; folder matching now decided from the files on disk and the tree re-expanded on `directoryLoaded` (see `Surprises & Discoveries`). `tests/test_workspace_search.py` (11 tests); 108 passed. Scripted real-window run and screenshots (see `Artifacts and Notes`).
-- [ ] Milestone 3: editing tags from the toolbar field (with suggestions) and from the right-click menu; Swedish translations; scripted check in the real window.
+- [x] (2026-10-17) Milestone 2 committed as `ae0958b`.
+- [x] (2026-10-17) Milestone 3: `TagLineEdit` and `TagCompleter` in `main.py`; toolbar tag field with suggestions from `_known_workspace_tags` (Archive skipped); `_on_tags_edit_finished`, `_sync_tags_from_editor`; right-click "Tags..." with `edit_file_tags` / `set_file_tags` (plus a small `_is_open_file` helper); 3 Swedish strings. No new unit tests (Qt-dialog driven); scripted real-window run and toolbar screenshots (see `Artifacts and Notes`). 108 passed.
 - [ ] Milestone 4: `README.md` and `AGENTS.md` updated; full test run; manual check on a real display; retrospective written.
 
 
@@ -59,7 +60,7 @@ Sorting the tree by tag was discussed and deliberately left out of this plan (se
 
 ## Outcomes & Retrospective
 
-Milestone 1 (2026-10-17): tags can be read from and written to the note header and to closed `.testlog` files, case-insensitively, without disturbing `status:`, the body or images. Nothing in the UI uses them yet. Milestone 2 (2026-10-17): tags show in the sidebar and tooltip, and `#tag` search works across collapsed folders; plain-text search also gained that. Milestones 3-4 remain.
+Milestone 1 (2026-10-17): tags can be read from and written to the note header and to closed `.testlog` files, case-insensitively, without disturbing `status:`, the body or images. Nothing in the UI uses them yet. Milestone 2 (2026-10-17): tags show in the sidebar and tooltip, and `#tag` search works across collapsed folders; plain-text search also gained that. Milestone 3 (2026-10-17): tags can be edited from the toolbar field, with suggestions for the tag being typed, from the note header itself, and from the right-click menu for notes that are not open. Milestone 4 (docs, manual check on a real display) remains.
 
 
 ## Context and Orientation
@@ -170,6 +171,21 @@ Milestone 2, real window (offscreen, scratch settings), workspace with notes in 
     tooltip: 'Status:   Doing\nTaggar:   td, login\n...'
 
 Sidebar screenshots were checked in light and dark mode at the default and the maximum sidebar width.
+
+Milestone 3, real window (offscreen, scratch settings; key presses sent with `QTest`):
+
+    field after open: ''
+    suggestions (Archive skipped): ['regression']
+    completion for 'TD, reg': TD, regression,  | popup visible: True
+    field after Enter: 'td, meet'
+    editor header: ['status: doing', 'tags: td, meet']
+    on disk after autosave: ('doing', ['td', 'meet'])
+    field after editing header in editor: 'td'
+    closed note via Tags...: ('todo', ['meet', 'td']) | body kept: # meetings/weekly
+    #td now shows: ['meetings/weekly.testlog', 'tdialog/login.testlog']
+    sv placeholder: Taggar
+
+Opening a note fills the field through `textChanged`, so no extra call in `open_testlog` or `new_file` was needed.
 
 
 ## Interfaces and Dependencies
