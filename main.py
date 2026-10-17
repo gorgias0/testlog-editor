@@ -75,6 +75,7 @@ from testlog_utils import (
     TESTLOG_STATUS_OPTIONS,
 )
 from translations import TRANSLATIONS
+from trash import available_path
 from version import get_version_info
 from workspace_models import TESTLOG_STATUS_ROLE, TESTLOG_TAGS_ROLE, WorkspaceFileSystemModel, WorkspaceSortProxyModel
 
@@ -4354,18 +4355,7 @@ class MainWindow(QMainWindow):
         return "Arkiv" if self.current_language == "sv" else "Archive"
 
     def _available_path(self, path):
-        if not os.path.exists(path):
-            return path
-
-        directory = os.path.dirname(path)
-        stem, extension = os.path.splitext(os.path.basename(path))
-        counter = 2
-        while True:
-            candidate = os.path.join(directory, f"{stem} {counter}{extension}")
-            if not os.path.exists(candidate):
-                return candidate
-            counter += 1
-
+        return available_path(path)
     def toggle_pin(self, path):
         if path in self.pinned_files:
             self.pinned_files = [p for p in self.pinned_files if p != path]
