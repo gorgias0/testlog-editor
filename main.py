@@ -4292,8 +4292,9 @@ class MainWindow(QMainWindow):
         if self._is_trash_root(path):
             return
         permanent = not self.workspace_dir or is_in_trash(self.workspace_dir, path)
-        deleted_index = self.fs_proxy_model.mapFromSource(self.fs_model.index(path))
-        replacement_path = self._replacement_file_path_after_delete(deleted_index, path)
+        # Look up the neighbour before the item disappears from the tree.
+        next_path = self._next_file_in_same_folder(path)
+        was_open = bool(self.current_file) and self._is_inside_folder(os.path.abspath(self.current_file), os.path.abspath(path))
         filename = os.path.basename(path)
         if permanent:
             question = (
@@ -4318,9 +4319,8 @@ class MainWindow(QMainWindow):
                 os.remove(path)
         else:
             # Save the open note first so Trash holds its latest text.
-            if self.current_file and self._is_inside_folder(os.path.abspath(self.current_file), os.path.abspath(path)):
-                if not self._flush_pending_changes():
-                    return
+            if was_open and not self._flush_pending_changes():
+                return
             try:
                 move_to_trash(self.workspace_dir, path)
             except (TrashError, OSError):
@@ -4335,28 +4335,19 @@ class MainWindow(QMainWindow):
         self._remove_tracked_paths(path)
         self._remove_fulltext_index_entries_for_path(path)
         self.refresh_pinned()
-        if self.current_file is None:
-            if replacement_path and os.path.isfile(replacement_path):
-                self.open_testlog(replacement_path)
+        # Stay in the same folder, as archiving does.
+        if was_open:
+            if next_path and os.path.isfile(next_path):
+                self.open_testlog(next_path)
             else:
                 self.editor.clear()
                 self.tree.clearSelection()
                 self.setWindowTitle(self._window_title())
+        elif next_path:
+            self._select_file_in_tree(next_path)
+        else:
+            self.tree.clearSelection()
         self._start_fulltext_indexing()
-
-    def _replacement_file_path_after_delete(self, deleted_index, deleted_path):
-        if not deleted_index.isValid():
-            return None
-
-        for neighbor_getter in (self.tree.indexBelow, self.tree.indexAbove):
-            neighbor_index = neighbor_getter(deleted_index)
-            while neighbor_index.isValid():
-                source_index = self.fs_proxy_model.mapToSource(neighbor_index)
-                candidate_path = self.fs_model.filePath(source_index)
-                if candidate_path != deleted_path and candidate_path.endswith(".testlog") and os.path.isfile(candidate_path):
-                    return candidate_path
-                neighbor_index = neighbor_getter(neighbor_index)
-        return None
 
     def move_item(self, path):
         destination = QFileDialog.getExistingDirectory(
