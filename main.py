@@ -2840,7 +2840,10 @@ class MainWindow(QMainWindow):
 
         self.new_action = QAction(self)
         self.new_action.setShortcut("Ctrl+N")
-        self.new_action.triggered.connect(self.new_file)
+        self.new_action.triggered.connect(self.new_note_from_shortcut)
+        self.new_folder_action = QAction(self)
+        self.new_folder_action.setShortcut("Ctrl+Shift+N")
+        self.new_folder_action.triggered.connect(self.new_folder_in_workspace)
 
         self.open_action = QAction(self)
         self.open_action.setShortcut("Ctrl+O")
@@ -2996,6 +2999,7 @@ class MainWindow(QMainWindow):
         self.quit_action.triggered.connect(self.close)
 
         self.file_menu.addAction(self.new_action)
+        self.file_menu.addAction(self.new_folder_action)
         self.file_menu.addAction(self.open_action)
         self.file_menu.addAction(self.open_workspace_action)
         self.file_menu.addSeparator()
@@ -3412,6 +3416,9 @@ class MainWindow(QMainWindow):
 
         self.btn_new_file.setText(self._tr("+ New File"))
         self.btn_new_folder.setText(self._tr("+ Folder"))
+        self.btn_new_file.setToolTip(self._tr("New note in the selected folder (Ctrl+N)"))
+        self.btn_new_folder.setToolTip(self._tr("New folder in the selected folder (Ctrl+Shift+N)"))
+        self.new_folder_action.setText(self._tr("New Folder..."))
         self.btn_sort.setToolTip(self._tr("Sorting"))
         self.action_sort_name.setText(self._tr("Name (A-Z)"))
         self.action_sort_modified.setText(self._tr("Last Modified"))
@@ -5201,6 +5208,20 @@ class MainWindow(QMainWindow):
             return
         if self.save_file():
             self.statusBar().showMessage(self._tr("Autosaved"), 2000)
+
+    def new_note_from_shortcut(self):
+        # With a workspace open, Ctrl+N creates a named note in the selected folder like the
+        # "+ New File" button (saved and autosaved from the start), then puts the cursor in it.
+        if not self.workspace_dir:
+            self.new_file()
+            return
+        previous_file = self.current_file
+        self.new_file_in_workspace()
+        if self.current_file and self.current_file != previous_file:
+            cursor = self.editor.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self.editor.setTextCursor(cursor)
+            self.editor.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
     def new_file(self):
         if not self._flush_pending_changes():
