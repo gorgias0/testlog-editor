@@ -199,3 +199,27 @@ def test_rewrite_testlog_tags_keeps_images_and_status(tmp_path):
         assert set(zf.namelist()) == {"note.md", "images/shot.png"}
     assert get_testlog_tags(note) == ["td", "meet"]
     assert get_testlog_status(note) == "doing"
+
+
+def test_export_note_images_copies_images_beside_the_export_and_relinks(tmp_path):
+    from testlog_archive import export_note_images
+
+    images_dir = _images_dir(tmp_path, "my shot.png", "unused.png")
+    export_path = tmp_path / "out" / "Report.md"
+    export_path.parent.mkdir()
+    note = "# R\n![a](images/my%20shot.png)\n![missing](images/gone.png)\n![a again](images/my%20shot.png)\n"
+
+    text = export_note_images(note, str(images_dir), str(export_path))
+
+    assert text == "# R\n![a](Report_images/my%20shot.png)\n![missing](images/gone.png)\n![a again](Report_images/my%20shot.png)\n"
+    assert sorted(os.listdir(tmp_path / "out" / "Report_images")) == ["my shot.png"]
+
+
+def test_export_note_images_without_images_creates_no_folder(tmp_path):
+    from testlog_archive import export_note_images
+
+    images_dir = _images_dir(tmp_path)
+    export_path = tmp_path / "Report.md"
+
+    assert export_note_images("# R\nno images\n", str(images_dir), str(export_path)) == "# R\nno images\n"
+    assert not (tmp_path / "Report_images").exists()

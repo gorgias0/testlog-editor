@@ -3,8 +3,10 @@ import os
 import shutil
 import tempfile
 import zipfile
+from urllib.parse import quote, unquote
 
 from testlog_utils import (
+    IMAGE_REFERENCE_PATTERN,
     collect_referenced_image_filenames,
     set_testlog_status,
     set_testlog_tags,
@@ -51,6 +53,34 @@ def _atomic_replace(path, write_fn):
         except FileNotFoundError:
             pass
         raise
+
+
+def export_note_images(note_text, images_dir, export_path):
+    """Copy the note's images next to an exported Markdown file and point its links there.
+
+    Images go to "<export name>_images/" beside the export, so exports into the workspace do
+    not add a shared "images" folder and different exports never overwrite each other's images.
+    """
+    folder_name = os.path.splitext(os.path.basename(export_path))[0] + "_images"
+    target_dir = os.path.join(os.path.dirname(os.path.abspath(export_path)), folder_name)
+    replacements = {}
+    for raw_name in IMAGE_REFERENCE_PATTERN.findall(note_text):
+        if raw_name in replacements:
+            continue
+        source = os.path.join(images_dir, unquote(raw_name))
+        if not os.path.isfile(source):
+            continue
+        os.makedirs(target_dir, exist_ok=True)
+        shutil.copy2(source, os.path.join(target_dir, os.path.basename(source)))
+        replacements[raw_name] = f"{quote(folder_name)}/{quote(os.path.basename(source))}"
+
+    def relink(match):
+        new_target = replacements.get(match.group(1))
+        if new_target is None:
+            return match.group(0)
+        return match.group(0).replace(f"(images/{match.group(1)})", f"({new_target})")
+
+    return IMAGE_REFERENCE_PATTERN.sub(relink, note_text)
 
 
 def read_testlog_note_text(path):

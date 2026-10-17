@@ -2,6 +2,7 @@ import sys
 import os
 import uuid
 import json
+import mimetypes
 import shutil
 import re
 import base64
@@ -53,6 +54,7 @@ from testlog_archive import (
     extract_testlog_archive,
     read_testlog_note_text,
     rewrite_testlog_status,
+    export_note_images,
     rewrite_testlog_tags,
     TestlogArchiveError,
     write_testlog_archive,
@@ -5141,8 +5143,12 @@ class MainWindow(QMainWindow):
         if not path.lower().endswith(f".{extension}"):
             path += f".{extension}"
 
+        text = strip_testlog_front_matter(self.editor.toPlainText())
+        if extension == "md":
+            # The note's images live in its temporary session folder; copy them along.
+            text = export_note_images(text, self.images_dir, path)
         with open(path, "w", encoding="utf-8") as f:
-            f.write(strip_testlog_front_matter(self.editor.toPlainText()))
+            f.write(text)
         self.statusBar().showMessage(success_message, 3000)
 
     def _embed_images_as_base64(self, html):
@@ -5153,8 +5159,8 @@ class MainWindow(QMainWindow):
             if os.path.exists(path):
                 with open(path, "rb") as f:
                     data = base64.b64encode(f.read()).decode("utf-8")
-                ext = os.path.splitext(path)[1].lower().strip(".")
-                mime = "image/png" if ext == "png" else f"image/{ext}"
+                # "image/svg" or "image/jpg" are not real types; the PDF renderer drops such images.
+                mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
                 return f'src="data:{mime};base64,{data}"'
             return match.group(0)
 
