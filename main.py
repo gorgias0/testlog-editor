@@ -70,6 +70,7 @@ from testlog_utils import (
     TESTLOG_STATUS_OPTIONS,
 )
 from translations import TRANSLATIONS
+from version import get_version_info
 from workspace_models import TESTLOG_STATUS_ROLE, WorkspaceFileSystemModel, WorkspaceSortProxyModel
 
 try:
@@ -2039,7 +2040,7 @@ class MainWindow(QMainWindow):
         return f"&{text}" if text else text
 
     def _window_title(self, filename=None):
-        base = self._tr("TestLog Editor")
+        base = f"{self._tr('TestLog Editor')} {get_version_info()['version']}"
         if filename:
             return f"{base} - {filename}"
         return base
@@ -2552,6 +2553,7 @@ class MainWindow(QMainWindow):
         self.view_menu = menubar.addMenu("")
         self.tools_menu = menubar.addMenu("")
         self.language_menu = menubar.addMenu("")
+        self.help_menu = menubar.addMenu("")
 
         self.new_action = QAction(self)
         self.new_action.setShortcut("Ctrl+N")
@@ -2788,6 +2790,11 @@ class MainWindow(QMainWindow):
         self.language_menu.addAction(self.english_action)
         self.language_menu.addAction(self.swedish_action)
 
+        self.about_action = QAction(self)
+        self.about_action.setMenuRole(QAction.MenuRole.AboutRole)
+        self.about_action.triggered.connect(self.show_about)
+        self.help_menu.addAction(self.about_action)
+
     def _setup_toolbar(self):
         self.toolbar = QToolBar("Formatting")
         self.toolbar.setMovable(False)
@@ -2925,6 +2932,19 @@ class MainWindow(QMainWindow):
             self.timer.start()
             self.autosave_timer.start()
 
+    def show_about(self):
+        info = get_version_info()
+        lines = [
+            f"<b>{html_escape(self._tr('TestLog Editor'))}</b>",
+            f"{html_escape(self._tr('Version'))}: {html_escape(info['version'])}",
+            f"{html_escape(self._tr('Commit'))}: {html_escape(info['commit'])}",
+        ]
+        if info.get("build_date"):
+            lines.append(f"{html_escape(self._tr('Built'))}: {html_escape(info['build_date'])}")
+        else:
+            lines.append(html_escape(self._tr("Running from source")))
+        QMessageBox.about(self, self._tr("About TestLog Editor"), "<br>".join(lines))
+
     def _retranslate_ui(self):
         self.file_menu.setTitle(self._with_mnemonic(self._tr("File")))
         self.edit_menu.setTitle(self._with_mnemonic(self._tr("Edit")))
@@ -2934,6 +2954,7 @@ class MainWindow(QMainWindow):
         self.view_menu.setTitle(self._with_mnemonic(self._tr("View")))
         self.tools_menu.setTitle(self._with_mnemonic(self._tr("Tools")))
         self.language_menu.setTitle(self._with_mnemonic(self._tr("Language")))
+        self.help_menu.setTitle(self._with_mnemonic(self._tr("Help")))
 
         self.new_action.setText(self._tr("New"))
         self.open_action.setText(self._tr("Open..."))
@@ -2998,6 +3019,7 @@ class MainWindow(QMainWindow):
 
         self.english_action.setText(self._tr("English"))
         self.swedish_action.setText(self._tr("Swedish"))
+        self.about_action.setText(self._tr("About TestLog Editor"))
         self.english_action.setChecked(self.current_language == "en")
         self.swedish_action.setChecked(self.current_language == "sv")
 

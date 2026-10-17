@@ -44,6 +44,7 @@ source .venv/bin/activate
 ```
 
 PyInstaller outputs the packaged app in `dist/TestLog Editor/`. Builds are platform-specific.
+`testlog.spec` writes the version (`1.0.<commit count>`, short hash, build date) to the generated, git-ignored `_build_info.py`, which the packaged app reads; running from source asks git directly (`version.py`). There is no version number to bump by hand.
 Prefer updating `testlog.spec` when packaging needs to change.
 
 ## Tests

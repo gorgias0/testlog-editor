@@ -72,6 +72,7 @@ source .venv/Scripts/activate
 
 Notes:
 - Packaged output is written to `dist/TestLog Editor/`
+- The version is `1.0.<commit count>` and is stamped into the build from git (`git` must be on the PATH). Check it under Help → About or in the window title. `+dirty` means the build had uncommitted changes to tracked files
 - Packaging is driven by `testlog.spec`
 - Windows builds generate a real `.ico` from the app SVG so the packaged executable and taskbar use the TestLog Editor icon
 - PyInstaller builds are platform-specific, so build on the target OS

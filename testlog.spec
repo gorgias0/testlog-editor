@@ -5,6 +5,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules
 
 from icons import APP_ICON_SVG, ico_bytes_from_svg
+from version import BUILD_INFO_MODULE, collect_build_info, write_build_info
 
 EXCLUDED_QT_MODULES = [
     "PySide6.QtBluetooth",
@@ -46,7 +47,12 @@ EXCLUDED_MODULES = [
     *EXCLUDED_QT_MODULES,
 ]
 
-hiddenimports = collect_submodules("markdown_it") + collect_submodules("mdit_py_plugins")
+hiddenimports = collect_submodules("markdown_it") + collect_submodules("mdit_py_plugins") + [BUILD_INFO_MODULE]
+
+# Stamp the version (commit count, short hash, build date) into the bundle; see version.py.
+build_info = collect_build_info(SPECPATH)
+write_build_info(Path(SPECPATH) / f"{BUILD_INFO_MODULE}.py", build_info)
+print(f"TestLog Editor version {build_info['version']} ({build_info['commit']})")
 
 icon_dir = Path("build") / "icons"
 icon_dir.mkdir(parents=True, exist_ok=True)
