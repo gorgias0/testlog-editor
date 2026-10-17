@@ -1664,7 +1664,7 @@ class FullTextSearchDialog(QDialog):
         layout.setSpacing(2)
 
         display_name = Path(result["path"]).stem
-        filename_label = QLabel(f"<b>{display_name}</b>", container)
+        filename_label = QLabel(f"<b>{html_escape(display_name)}</b>", container)
         filename_label.setStyleSheet(
             f"background: transparent; color: {self._theme_colors.get('dialog_text', '#111827')};"
         )

@@ -33,3 +33,15 @@ def test_highlight_fulltext_snippet_wraps_all_case_insensitive_matches():
 
     assert highlighted.count("<span") == 2
     assert "font-weight: 600;" in highlighted
+
+
+def test_highlight_does_not_break_html_entities():
+    html = highlight_fulltext_snippet("R&D amp", "amp")
+
+    assert html == 'R&amp;D <span style="color: #2563eb; font-weight: 600;">amp</span>'
+
+
+def test_highlight_finds_queries_with_special_characters():
+    html = highlight_fulltext_snippet("Team R&D <beta>", "r&d")
+
+    assert html == 'Team <span style="color: #2563eb; font-weight: 600;">R&amp;D</span> &lt;beta&gt;'

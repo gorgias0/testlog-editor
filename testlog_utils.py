@@ -324,16 +324,19 @@ def build_fulltext_search_results(query, index, limit=50, snippet_radius=50):
 
 
 def highlight_fulltext_snippet(snippet, query, highlight_color="#2563eb"):
-    escaped_snippet = escape(snippet or "")
+    snippet = snippet or ""
     normalized_query = (query or "").strip()
     if not normalized_query:
-        return escaped_snippet
+        return escape(snippet)
 
+    # Match on the plain text and escape each piece; matching the escaped text broke entities
+    # ("amp" inside "&amp;") and never found queries containing & < >.
     pattern = re.compile(re.escape(normalized_query), re.IGNORECASE)
-    return pattern.sub(
-        lambda match: (
-            f'<span style="color: {highlight_color}; font-weight: 600;">'
-            f"{escape(match.group(0))}</span>"
-        ),
-        escaped_snippet,
-    )
+    parts = []
+    position = 0
+    for match in pattern.finditer(snippet):
+        parts.append(escape(snippet[position:match.start()]))
+        parts.append(f'<span style="color: {highlight_color}; font-weight: 600;">{escape(match.group(0))}</span>')
+        position = match.end()
+    parts.append(escape(snippet[position:]))
+    return "".join(parts)

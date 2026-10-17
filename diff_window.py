@@ -404,6 +404,15 @@ class DiffWindow(QDialog):
     def _schedule_diff_update(self):
         self.diff_timer.start()
 
+    @staticmethod
+    def _pane_lines(pane):
+        lines = []
+        block = pane.document().firstBlock()
+        while block.isValid():
+            lines.append(block.text())
+            block = block.next()
+        return lines
+
     def _update_change_counter(self):
         total_changes = len(self._change_blocks)
         if total_changes == 0:
@@ -513,18 +522,22 @@ class DiffWindow(QDialog):
     def update_diff(self):
         text_a = self.pane_a.toPlainText()
         text_b = self.pane_b.toPlainText()
-        if text_b == "":
+        # Compare only once both sides have text; with one side empty there is nothing to
+        # compare yet, so show no result rather than "No Changes" or a misleading change.
+        if text_a == "" or text_b == "":
             self._change_blocks = []
             self._current_change_index = -1
             self.pane_a.set_diff_selections([])
             self.pane_b.set_diff_selections([])
             self.previous_change_button.setEnabled(False)
             self.next_change_button.setEnabled(False)
-            self._update_change_counter()
+            self.change_counter_label.setText("")
             return
 
-        lines_a = text_a.splitlines(keepends=False)
-        lines_b = text_b.splitlines(keepends=False)
+        # Take the lines from the panes themselves: highlights are applied per pane line, and
+        # splitting the text differs from the panes for form feeds and U+2028 line separators.
+        lines_a = self._pane_lines(self.pane_a)
+        lines_b = self._pane_lines(self.pane_b)
         ignore_whitespace = self._ignore_whitespace_enabled()
         ignore_blank_lines = self._ignore_blank_lines_enabled()
         line_states_a, line_states_b = compute_line_diff_states(
