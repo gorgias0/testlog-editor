@@ -3960,17 +3960,28 @@ class MainWindow(QMainWindow):
         )
         if new_path == path:
             return
+        if self._path_taken_by_other_item(path, new_path):
+            self._warn_item_exists(self._tr("Rename"), new_path)
+            return
 
         current_abs = os.path.abspath(self.current_file) if self.current_file else None
         path_abs = os.path.abspath(path)
 
-        if not os.path.isdir(path) and current_abs == path_abs:
-            self.autosave_timer.stop()
-            self._write_testlog(new_path)
-            if os.path.exists(path):
-                os.remove(path)
-        else:
-            os.rename(path, new_path)
+        try:
+            if not os.path.isdir(path) and current_abs == path_abs:
+                self.autosave_timer.stop()
+                self._write_testlog(new_path)
+                if os.path.exists(path):
+                    os.remove(path)
+            else:
+                os.rename(path, new_path)
+        except OSError:
+            QMessageBox.warning(
+                self,
+                self._tr("Rename"),
+                self._tr("Could not rename {name}.").format(name=os.path.basename(path)),
+            )
+            return
 
         self._update_tracked_paths(path, new_path)
 
@@ -4048,8 +4059,19 @@ class MainWindow(QMainWindow):
         new_path = os.path.join(destination, os.path.basename(path))
         if os.path.abspath(new_path) == os.path.abspath(path):
             return
+        if self._path_taken_by_other_item(path, new_path):
+            self._warn_item_exists(self._tr("Move Item"), new_path)
+            return
 
-        os.rename(path, new_path)
+        try:
+            os.rename(path, new_path)
+        except OSError:
+            QMessageBox.warning(
+                self,
+                self._tr("Move Item"),
+                self._tr("Could not move {name}.").format(name=os.path.basename(path)),
+            )
+            return
         self._update_tracked_paths(path, new_path)
         self.refresh_pinned()
         self._select_file_in_tree(new_path)
@@ -4076,6 +4098,18 @@ class MainWindow(QMainWindow):
         self.refresh_pinned()
         self._select_file_in_tree(new_path, retry_attempts=6)
         self._start_fulltext_indexing()
+
+    @staticmethod
+    def _path_taken_by_other_item(path, new_path):
+        # samefile lets a case-only rename ("Foo" -> "foo") through on case-insensitive filesystems.
+        return os.path.exists(new_path) and not os.path.samefile(path, new_path)
+
+    def _warn_item_exists(self, title, new_path):
+        QMessageBox.warning(
+            self,
+            title,
+            self._tr("{name} already exists.").format(name=os.path.basename(new_path)),
+        )
 
     def _archive_folder_name(self):
         return "Arkiv" if self.current_language == "sv" else "Archive"

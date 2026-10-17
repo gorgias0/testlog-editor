@@ -22,7 +22,7 @@ How to see it working: run `python -m pytest` and see new tests for each of the 
 - [x] (2026-10-17) Milestone 2: `_atomic_replace` in `testlog_archive.py`, used by `write_testlog_archive` and `rewrite_testlog_status`; existing permissions kept, new files get `0o666 & ~umask`. 5 tests added; 61 passed. The two failure tests fail against the Milestone 1 code (`2 failed, 6 passed`) and pass now. Real-window smoke test: file is `-rw-r--r--`, no `.tmp` left.
 - [x] (2026-10-17) Milestone 2 committed as `898a5c6`.
 - [x] (2026-10-17) Milestone 3: `TestlogArchiveError` and `extract_testlog_archive` in `testlog_archive.py`; `MainWindow._new_session(session_dir=None)`; `open_testlog` extracts first, warns and returns `False` on failure, returns `True` on success; the now-unused `import zipfile` removed from `main.py`; Swedish string added. 4 tests added; 65 passed. Real-window scenario run before and after (see `Artifacts and Notes`).
-- [ ] Milestone 4: refuse rename/move onto an existing file.
+- [x] (2026-10-17) Milestone 4: `MainWindow._path_taken_by_other_item` and `_warn_item_exists`; `rename_item` and `move_item` refuse an existing target and report `OSError` instead of raising; 3 Swedish strings added. No unit tests (dialog-driven, as planned); scripted real-window scenario run before and after (see `Artifacts and Notes`). 65 passed.
 - [ ] Milestone 5: report errors to the user and to a log file.
 - [ ] Full test run, manual verification, `AGENTS.md`/`README.md` updated, retrospective written.
 
@@ -67,7 +67,7 @@ How to see it working: run `python -m pytest` and see new tests for each of the 
 
 ## Outcomes & Retrospective
 
-Milestone 1 (2026-10-17): images inserted from files with spaces or non-ASCII letters in their names now survive saving. The archive code is in `testlog_archive.py` and covered by tests. `_write_testlog` no longer writes `note.md` into the session folder (it uses `writestr`); nothing else read that copy. Milestone 2 (2026-10-17): every write of a `.testlog` file now goes through a temporary file in the same folder and `os.replace`, so an interrupted save leaves the previous version readable. Milestone 3 (2026-10-17): opening a damaged `.testlog` shows a warning and leaves the open note, its session folder and its images untouched; before, the next autosave rewrote the open note without its images. Milestones 4-5 remain.
+Milestone 1 (2026-10-17): images inserted from files with spaces or non-ASCII letters in their names now survive saving. The archive code is in `testlog_archive.py` and covered by tests. `_write_testlog` no longer writes `note.md` into the session folder (it uses `writestr`); nothing else read that copy. Milestone 2 (2026-10-17): every write of a `.testlog` file now goes through a temporary file in the same folder and `os.replace`, so an interrupted save leaves the previous version readable. Milestone 3 (2026-10-17): opening a damaged `.testlog` shows a warning and leaves the open note, its session folder and its images untouched; before, the next autosave rewrote the open note without its images. Milestone 4 (2026-10-17): renaming or moving onto an existing name now shows "<name> already exists." and changes nothing; before, the other file was silently overwritten on Linux. The case-only rename path (`Foo` to `foo`) relies on `os.path.samefile` and was not exercised, because WSL's ext4 is case-sensitive; check it on Windows. Milestone 5 remains.
 
 
 ## Context and Orientation
@@ -235,6 +235,20 @@ After:
     session unchanged: True
     image still in session: True
     good archive after save: ['images/shot.png', 'note.md']
+
+Milestone 4, real window with `QInputDialog` and `QFileDialog` patched to return scripted answers; files `a`, `b`, `open` and `sub/a` each hold "content <name>". Before (commit `898a5c6`):
+
+    rename a->b:      a = MISSING | b = content a
+    rename open->b:   open = MISSING | b = content open
+    FileNotFoundError ... (the old move then failed because a.testlog was already gone)
+
+After:
+
+    rename a->b:      a = content a | b = content b
+    rename open->b:   open = content open | b = content b
+    move a->sub/:     a = content a | sub/a = content a-sub
+    rename a->c:      a = MISSING | c = content a
+    warnings: ['b.testlog already exists.', 'b.testlog already exists.', 'a.testlog already exists.']
 
 To be filled in later: the final `pytest` summary line.
 
