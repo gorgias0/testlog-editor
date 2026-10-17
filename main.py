@@ -3946,7 +3946,7 @@ class MainWindow(QMainWindow):
     def set_file_status(self, path, status):
         normalized_status = normalize_testlog_status(status)
         if not path.endswith(".testlog") or not os.path.isfile(path):
-            return
+            return False
 
         if self.current_file and os.path.abspath(path) == os.path.abspath(self.current_file):
             self.current_status = normalized_status
@@ -3954,18 +3954,18 @@ class MainWindow(QMainWindow):
             updated_text = set_testlog_status(self.editor.toPlainText(), normalized_status)
             if updated_text != self.editor.toPlainText():
                 self._replace_editor_text_preserving_cursor(updated_text)
-            self.save_file()
-            return
+            return self.save_file()
 
         try:
             self._write_status_to_testlog(path, normalized_status)
         except Exception:
             logger.exception("Could not change status of %s", path)
             self.statusBar().showMessage(self._tr("Could not save {name}").format(name=os.path.basename(path)))
-            return
+            return False
         self._update_fulltext_index_for_file(path)
         self.fs_model.refresh_status(path)
         self._refresh_sidebar_sort()
+        return True
 
     def _write_status_to_testlog(self, path, status):
         rewrite_testlog_status(path, status)
@@ -4123,6 +4123,20 @@ class MainWindow(QMainWindow):
 
         new_path = os.path.join(archive_dir, os.path.basename(path))
         if os.path.abspath(new_path) == os.path.abspath(path):
+            return
+
+        # Archiving means finished. Mark it done before moving, and leave the file where
+        # it is if that fails, so an archived note never keeps a stale status.
+        current_status = self.current_status if was_open else read_testlog_status_from_archive(path)
+        if current_status != "done" and not self.set_file_status(path, "done"):
+            if was_open:
+                # The editor already switched to "done"; put the old status back so a later
+                # autosave does not mark a note that was never archived as done.
+                self.current_status = current_status
+                self._set_status_combo(current_status)
+                self._replace_editor_text_preserving_cursor(
+                    set_testlog_status(self.editor.toPlainText(), current_status)
+                )
             return
 
         # Look up the neighbour before the move, while the archived file is still in the tree.
