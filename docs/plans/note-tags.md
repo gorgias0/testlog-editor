@@ -17,7 +17,8 @@ Sorting the tree by tag was discussed and deliberately left out of this plan (se
 ## Progress
 
 - [x] (2026-10-17) Milestone 1: `normalize_testlog_tags`, `format_testlog_tags`, `get_testlog_tags`, `set_testlog_tags`, `read_testlog_header_from_archive` in `testlog_utils.py` (`read_testlog_status_from_archive` now wraps the header reader); `rewrite_testlog_note` and `rewrite_testlog_tags` in `testlog_archive.py` (`rewrite_testlog_status` now uses `rewrite_testlog_note`). 20 tests added; 97 passed.
-- [ ] Milestone 2: the sidebar shows tags and the search box understands `#tag` (`workspace_models.py`, `WorkspaceTreeItemDelegate` in `main.py`), unit tests for the matching rule.
+- [x] (2026-10-17) Milestone 1 committed as `2a715f9`.
+- [x] (2026-10-17) Milestone 2: `TESTLOG_TAGS_ROLE`, header cache (`_header_for_path`, `tags_for_path`), tags in the tooltip, `parse_sidebar_search` and `sidebar_search_matches` in `workspace_models.py`; tags drawn in `WorkspaceTreeItemDelegate`; folder matching now decided from the files on disk and the tree re-expanded on `directoryLoaded` (see `Surprises & Discoveries`). `tests/test_workspace_search.py` (11 tests); 108 passed. Scripted real-window run and screenshots (see `Artifacts and Notes`).
 - [ ] Milestone 3: editing tags from the toolbar field (with suggestions) and from the right-click menu; Swedish translations; scripted check in the real window.
 - [ ] Milestone 4: `README.md` and `AGENTS.md` updated; full test run; manual check on a real display; retrospective written.
 
@@ -26,6 +27,9 @@ Sorting the tree by tag was discussed and deliberately left out of this plan (se
 
 - Observation: a single piece such as `"x y"` inside a list passed to `normalize_testlog_tags` is split into two tags, because lists are split with the same comma/whitespace rule as strings. This is intended (a tag cannot contain a space) and covered by a test.
   Evidence: `normalize_testlog_tags(["TD", "x y"]) == ["td", "x", "y"]`.
+- Observation: the sidebar search (already before this plan) only found notes in folders the tree had loaded. `QFileSystemModel` loads a folder's contents only when it is expanded, and `_directory_contains_match` counted loaded rows, so collapsed folders looked empty and were hidden, and `expandAll()` never reached them. `#td` across folders could not work without fixing this.
+  Evidence: at commit `2a715f9`, searching `login` in a scratch workspace showed `misc/untagged-login` but not `tdialog/login-flow`.
+- Observation: with tags capped at 40 percent of the row width, as first planned, the default 200-pixel sidebar cut most note names to a few letters (`weekly-s…`, `td-…`), which broke the plan's own "names stay readable" acceptance.
 
 
 ## Decision Log
@@ -42,6 +46,12 @@ Sorting the tree by tag was discussed and deliberately left out of this plan (se
 - Decision: a tag is one word made of letters, digits, `-` and `_`; tags are separated by commas or spaces; a leading `#` is dropped; duplicates are removed while keeping the first order.
   Rationale: `#td` must be usable in the search box, so a tag cannot contain spaces; accepting both commas and spaces means `td, meet`, `td meet` and `#td #meet` all give the same result, so the user does not need to remember a format. Letters include Swedish letters (Python's `str.isalnum` accepts them).
   Date/Author: 2026-10-17 / Claude.
+- Decision: fix the collapsed-folder search problem inside Milestone 2: `WorkspaceSortProxyModel.set_search` walks the workspace on disk (`os.walk` from the file model's root path) once per search and records every folder that contains a match (`_matching_dirs`); `_directory_contains_match` looks folders up there, always accepting the workspace root and the folders above it so the tree keeps its root; and `MainWindow._on_tree_directory_loaded` (connected to `QFileSystemModel.directoryLoaded`) calls `expandAll()` again while a search is active, so matches inside folders that load later become visible. Paths are compared after `os.path.normcase(os.path.normpath(...))` because the file model uses `/` on Windows.
+  Rationale: the feature's main purpose, finding all notes with a tag across folders, depends on it, and the same fix makes plain-text search find notes in collapsed folders.
+  Date/Author: 2026-10-17 / Claude.
+- Decision: tags get only the space the full note name does not need, and are hidden (tooltip only) when less than 28 pixels remain, replacing the planned 40 percent cap.
+  Rationale: the sidebar defaults to 200 pixels; names must win. Widening the sidebar (up to 350 pixels) shows the tags.
+  Date/Author: 2026-10-17 / Claude.
 - Decision: tag suggestions in the toolbar come from reading the headers of all `.testlog` files in the workspace on demand, through the same per-file cache the sidebar uses, instead of extending the full-text indexer thread.
   Rationale: the indexer (`Indexer` in `main.py`) reads note text without the header and reports through a Qt signal with a fixed signature; changing it touches the full-text search dialog too. A workspace has at most a few hundred notes, and reading a zip header takes well under a millisecond, so an on-demand scan with a cache keyed on modification time is fast enough and keeps the change local. Revisit if a workspace grows to thousands of notes.
   Date/Author: 2026-10-17 / Claude.
@@ -49,7 +59,7 @@ Sorting the tree by tag was discussed and deliberately left out of this plan (se
 
 ## Outcomes & Retrospective
 
-Milestone 1 (2026-10-17): tags can be read from and written to the note header and to closed `.testlog` files, case-insensitively, without disturbing `status:`, the body or images. Nothing in the UI uses them yet. Milestones 2-4 remain.
+Milestone 1 (2026-10-17): tags can be read from and written to the note header and to closed `.testlog` files, case-insensitively, without disturbing `status:`, the body or images. Nothing in the UI uses them yet. Milestone 2 (2026-10-17): tags show in the sidebar and tooltip, and `#tag` search works across collapsed folders; plain-text search also gained that. Milestones 3-4 remain.
 
 
 ## Context and Orientation
@@ -149,7 +159,17 @@ Every milestone is code plus tests and can be redone after `git checkout -- <fil
 
 ## Artifacts and Notes
 
-To be filled in during implementation.
+Milestone 2, real window (offscreen, scratch settings), workspace with notes in `tdialog/`, `meetings/`, `misc/` and `misc/deep/`, all folders collapsed before searching:
+
+    '#td'          -> ['misc/deep/td-meeting-notes', 'tdialog/checkout', 'tdialog/login-flow']
+    '#TD login'    -> ['tdialog/login-flow']
+    '#meet'        -> ['meetings/weekly-sync', 'misc/deep/td-meeting-notes']
+    '#td #meet'    -> ['misc/deep/td-meeting-notes']
+    'login'        -> ['misc/untagged-login', 'tdialog/login-flow']
+    '#tdialog'     -> []
+    tooltip: 'Status:   Doing\nTaggar:   td, login\n...'
+
+Sidebar screenshots were checked in light and dark mode at the default and the maximum sidebar width.
 
 
 ## Interfaces and Dependencies

@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate, QStyleOptionViewItem,
 )
 from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, Signal, QItemSelectionModel, QSize, QPoint, QFileInfo, QRect
-from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QTextBlockFormat, QIntValidator, QShortcut, QColor, QTextCharFormat, QSyntaxHighlighter, QDesktopServices, QPainter
+from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QTextBlockFormat, QIntValidator, QShortcut, QColor, QTextCharFormat, QSyntaxHighlighter, QDesktopServices, QPainter, QPalette
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineContextMenuRequest, QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebChannel import QWebChannel
@@ -71,7 +71,7 @@ from testlog_utils import (
 )
 from translations import TRANSLATIONS
 from version import get_version_info
-from workspace_models import TESTLOG_STATUS_ROLE, WorkspaceFileSystemModel, WorkspaceSortProxyModel
+from workspace_models import TESTLOG_STATUS_ROLE, TESTLOG_TAGS_ROLE, WorkspaceFileSystemModel, WorkspaceSortProxyModel
 
 try:
     from mdit_py_plugins.tasklists import tasklists_plugin
@@ -1637,6 +1637,9 @@ class WorkspaceTreeItemDelegate(QStyledItemDelegate):
         "done": "#8b8b93",
     }
 
+    TAGS_GAP = 8
+    TAGS_MIN_WIDTH = 28
+
     def paint(self, painter, option, index):
         status = index.data(TESTLOG_STATUS_ROLE)
         if not status:
@@ -1644,9 +1647,32 @@ class WorkspaceTreeItemDelegate(QStyledItemDelegate):
             return
 
         dot_space = 18
+        tags = index.data(TESTLOG_TAGS_ROLE) or []
+        tags_text = ""
+        tags_width = 0
+        if tags:
+            # Tags sit in grey between the name and the status dot, but only in the space the
+            # full name does not need; when too little is left they stay in the tooltip only.
+            name = index.data(Qt.ItemDataRole.DisplayRole) or ""
+            name_width = option.fontMetrics.horizontalAdvance(name)
+            icon_width = option.decorationSize.width() + self.TAGS_GAP
+            free_width = option.rect.width() - dot_space - icon_width - name_width - self.TAGS_GAP * 2
+            if free_width >= self.TAGS_MIN_WIDTH:
+                tags_text = option.fontMetrics.elidedText(" · ".join(tags), Qt.TextElideMode.ElideRight, free_width)
+                tags_width = option.fontMetrics.horizontalAdvance(tags_text)
+
         item_option = QStyleOptionViewItem(option)
-        item_option.rect = option.rect.adjusted(0, 0, -dot_space, 0)
+        reserved = dot_space + (tags_width + self.TAGS_GAP if tags_text else 0)
+        item_option.rect = option.rect.adjusted(0, 0, -reserved, 0)
         super().paint(painter, item_option, index)
+
+        if tags_text:
+            painter.save()
+            painter.setFont(option.font)
+            painter.setPen(option.palette.color(QPalette.ColorRole.PlaceholderText))
+            tags_rect = QRect(option.rect.right() - dot_space - tags_width, option.rect.top(), tags_width, option.rect.height())
+            painter.drawText(tags_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, tags_text)
+            painter.restore()
 
         dot_size = 10
         dot_x = option.rect.right() - dot_space + ((dot_space - dot_size) // 2)
@@ -3146,6 +3172,7 @@ class MainWindow(QMainWindow):
         self.fs_proxy_model = WorkspaceSortProxyModel(self.fs_model, self.pinned_paths, self)
         self.fs_model.setNameFilters(["*.testlog"])
         self.fs_model.setNameFilterDisables(True)  # Visar mappar, gråar ut andra filer
+        self.fs_model.directoryLoaded.connect(self._on_tree_directory_loaded)
         self.fs_model.setFilter(QDir.AllDirs | QDir.Files | QDir.NoDotAndDotDot)
 
         self.tree = QTreeView()
@@ -3351,6 +3378,11 @@ class MainWindow(QMainWindow):
             self._restore_expanded_tree_paths(self._tree_expanded_paths_before_search)
             self._tree_expanded_paths_before_search = None
         self.tree.viewport().update()
+
+    def _on_tree_directory_loaded(self, _path):
+        # Folders load lazily; while searching, expand matches that arrive after expandAll().
+        if self.sidebar_search.text():
+            self.tree.expandAll()
 
     def _expanded_tree_paths(self):
         expanded_paths = set()
