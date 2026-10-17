@@ -120,6 +120,7 @@ TRANSLATIONS = {
         "TestLog Editor": "TestLog Editor",
         "English": "Engelska",
         "Swedish": "Svenska",
+        "Filter files (Ctrl+L). #tag filters by tag, ↓ moves to the list, Enter opens the first match. Ctrl+0 or Alt+← jumps to the file tree, Alt+→ back to the editor.": "Filtrera filer (Ctrl+L). #tagg filtrerar på tagg, ↓ går till listan, Enter öppnar första träffen. Ctrl+0 eller Alt+← hoppar till filträdet, Alt+→ tillbaka till editorn.",
         "Unsaved Changes": "Osparade ändringar",
         "Save changes before leaving this file?": "Spara ändringarna innan du lämnar filen?",
         "Search all documents...": "Sök i alla dokument...",

@@ -10,6 +10,7 @@ import tempfile
 import ctypes
 import logging
 import threading
+import time
 from enum import Enum
 from html import escape as html_escape
 from html.parser import HTMLParser
@@ -3176,6 +3177,15 @@ class MainWindow(QMainWindow):
         self.search_shortcut.activated.connect(self.open_fulltext_search)
         self.recent_switcher_shortcut = QShortcut(QKeySequence("Ctrl+R"), self)
         self.recent_switcher_shortcut.activated.connect(self.open_recent_switcher)
+        self.focus_sidebar_search_shortcut = QShortcut(QKeySequence("Ctrl+L"), self)
+        self.focus_sidebar_search_shortcut.activated.connect(self.focus_sidebar_search)
+        self.focus_file_tree_shortcut = QShortcut(QKeySequence("Ctrl+0"), self)
+        self.focus_file_tree_shortcut.activated.connect(self.focus_file_tree)
+        # Alt+Left/Right move between the panels as they are laid out: tree left, editor right.
+        self.focus_tree_left_shortcut = QShortcut(QKeySequence("Alt+Left"), self)
+        self.focus_tree_left_shortcut.activated.connect(self.focus_file_tree)
+        self.focus_editor_right_shortcut = QShortcut(QKeySequence("Alt+Right"), self)
+        self.focus_editor_right_shortcut.activated.connect(self.focus_editor_panel)
 
     def _set_status_combo(self, status):
         if not hasattr(self, "status_combo"):
@@ -3422,6 +3432,7 @@ class MainWindow(QMainWindow):
 
         self.sidebar_search = QLineEdit()
         self.sidebar_search.setPlaceholderText(self._tr("Search Files..."))
+        self.sidebar_search.setToolTip(self._tr("Filter files (Ctrl+L). #tag filters by tag, ↓ moves to the list, Enter opens the first match. Ctrl+0 or Alt+← jumps to the file tree, Alt+→ back to the editor."))
         self.sidebar_search.setClearButtonEnabled(True)
         self.sidebar_search.textChanged.connect(lambda text: self._schedule_sidebar_search(text))
         sidebar_layout.addWidget(self.sidebar_search)
@@ -3636,14 +3647,122 @@ class MainWindow(QMainWindow):
             self.toolbar.widgetForAction(self.toolbar_text_tool_action),
             self.toolbar.widgetForAction(self.toolbar_diff_action),
             self.status_combo,
+            self.tags_edit,
             self.toggle_btn,
         ]
         focus_chain = [self.menuBar()] + [widget for widget in toolbar_widgets if widget is not None]
         for widget in focus_chain:
             widget.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        # A text field must also take focus from a click.
+        self.tags_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         focus_chain.extend([self.sidebar_search, self.btn_new_file, self.btn_new_folder, self.btn_sort, self.tree, self.editor, self.preview])
         for current_widget, next_widget in zip(focus_chain, focus_chain[1:]):
             self.setTabOrder(current_widget, next_widget)
+
+        # Keyboard navigation between the sidebar search, the file tree and the editor.
+        self.sidebar_search.installEventFilter(self)
+        self.tree.installEventFilter(self)
+        self.tree.viewport().installEventFilter(self)
+
+    def focus_sidebar_search(self):
+        self.sidebar_search.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self.sidebar_search.selectAll()
+
+    def focus_file_tree(self):
+        # Land on the open note when it is visible, otherwise keep the tree's own position.
+        if self.current_file:
+            self._select_file_in_tree(self.current_file)
+        if not self.tree.currentIndex().isValid():
+            first = self._first_visible_tree_file()
+            if first is not None:
+                self.tree.setCurrentIndex(first)
+        self.tree.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def _open_keyboard_context_menu(self):
+        self._keyboard_menu_opened_at = time.monotonic()
+        self.show_context_menu_for_current_item()
+
+    def focus_editor_panel(self):
+        # In preview-only mode the editor is hidden; go to the preview instead.
+        target = self.editor if self.editor.isVisible() else self.preview
+        target.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def _first_visible_tree_file(self):
+        # Depth-first through expanded folders, as the rows appear on screen.
+        def walk(parent):
+            for row in range(self.fs_proxy_model.rowCount(parent)):
+                index = self.fs_proxy_model.index(row, 0, parent)
+                path = self.fs_model.filePath(self.fs_proxy_model.mapToSource(index))
+                if path.endswith(".testlog") and os.path.isfile(path):
+                    return index
+                if self.tree.isExpanded(index):
+                    found = walk(index)
+                    if found is not None:
+                        return found
+            return None
+
+        return walk(self.tree.rootIndex())
+
+    def _open_tree_index(self, index):
+        path = self.fs_model.filePath(self.fs_proxy_model.mapToSource(index))
+        if os.path.isdir(path):
+            self.tree.setExpanded(index, not self.tree.isExpanded(index))
+            return
+        if not path.endswith(".testlog"):
+            return
+        self.tree.setCurrentIndex(index)
+        self.tree_item_clicked(index)
+        if self.current_file and os.path.abspath(self.current_file) == os.path.abspath(path):
+            self.editor.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def eventFilter(self, obj, event):
+        if obj is self.tree and event.type() == event.Type.KeyPress:
+            if event.key() == Qt.Key.Key_F10 and event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
+                self._open_keyboard_context_menu()
+                return True
+        if obj in (self.tree, self.tree.viewport()) and event.type() == event.Type.ContextMenu:
+            # A keyboard-triggered menu (Windows sends one for the Menu key) has no click position;
+            # use the highlighted row, and skip it right after the key press already opened one.
+            if event.reason() == event.Reason.Keyboard:
+                if time.monotonic() - getattr(self, "_keyboard_menu_opened_at", 0.0) > 0.5:
+                    self._open_keyboard_context_menu()
+                return True
+        if event.type() == event.Type.KeyPress and event.modifiers() in (
+            Qt.KeyboardModifier.NoModifier,
+            Qt.KeyboardModifier.KeypadModifier,
+        ):
+            key = event.key()
+            if obj is self.sidebar_search:
+                if key == Qt.Key.Key_Down:
+                    first = self._first_visible_tree_file()
+                    if first is not None:
+                        self.tree.setCurrentIndex(first)
+                    self.tree.setFocus(Qt.FocusReason.OtherFocusReason)
+                    return True
+                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    self.sidebar_search_timer.stop()
+                    self._apply_sidebar_search()
+                    first = self._first_visible_tree_file()
+                    if first is not None:
+                        self._open_tree_index(first)
+                    return True
+                if key == Qt.Key.Key_Escape:
+                    if self.sidebar_search.text():
+                        self.sidebar_search.clear()
+                    else:
+                        self.editor.setFocus(Qt.FocusReason.OtherFocusReason)
+                    return True
+            elif obj is self.tree:
+                if key == Qt.Key.Key_Menu:
+                    self._open_keyboard_context_menu()
+                    return True
+                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.tree.currentIndex().isValid():
+                    self._open_tree_index(self.tree.currentIndex())
+                    return True
+                if key == Qt.Key.Key_Escape:
+                    self.editor.setFocus(Qt.FocusReason.OtherFocusReason)
+                    return True
+        return super().eventFilter(obj, event)
 
     def set_sort(self, mode):
         self.sort_mode = mode
@@ -4238,7 +4357,18 @@ class MainWindow(QMainWindow):
         self.tree.viewport().update()
 
     def show_context_menu(self, pos):
-        index = self.tree.indexAt(pos)
+        self._show_tree_context_menu(self.tree.indexAt(pos), self.tree.viewport().mapToGlobal(pos))
+
+    def show_context_menu_for_current_item(self):
+        # Keyboard (Menu key, Shift+F10): open the menu for the highlighted row, just below it.
+        index = self.tree.currentIndex()
+        if not index.isValid():
+            return
+        self.tree.scrollTo(index)
+        rect = self.tree.visualRect(index)
+        self._show_tree_context_menu(index, self.tree.viewport().mapToGlobal(rect.bottomLeft() + QPoint(16, 0)))
+
+    def _show_tree_context_menu(self, index, global_pos):
         if not index.isValid():
             return
 
@@ -4253,14 +4383,14 @@ class MainWindow(QMainWindow):
 
         if self._is_trash_root(path):
             empty_action = menu.addAction(self._tr("Empty Trash"))
-            if menu.exec(self.tree.viewport().mapToGlobal(pos)) == empty_action:
+            if menu.exec(global_pos) == empty_action:
                 self.empty_workspace_trash()
             return
 
         if self._is_trashed_item(path):
             restore_action = menu.addAction(self._tr("Restore"))
             delete_action = menu.addAction(self._tr("Delete"))
-            chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
+            chosen = menu.exec(global_pos)
             if chosen == restore_action:
                 self.restore_item(path)
             elif chosen == delete_action:
@@ -4290,7 +4420,7 @@ class MainWindow(QMainWindow):
             pin_action = None
             archive_action = None
 
-        chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
+        chosen = menu.exec(global_pos)
         if chosen == rename_action:
             self.rename_item(path)
         elif chosen == delete_action:
