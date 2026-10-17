@@ -4288,12 +4288,12 @@ class MainWindow(QMainWindow):
 
         try:
             if not os.path.isdir(path) and current_abs == path_abs:
+                # Save in place, then rename like any other file. Writing to the new name and
+                # removing the old one deleted the note on a letter-case-only rename on Windows
+                # (both names are the same file there) and left a copy when the removal failed.
                 self.autosave_timer.stop()
-                self._write_testlog(new_path)
-                if os.path.exists(path):
-                    os.remove(path)
-            else:
-                os.rename(path, new_path)
+                self._write_testlog(path)
+            os.rename(path, new_path)
         except OSError:
             QMessageBox.warning(
                 self,
@@ -4575,6 +4575,10 @@ class MainWindow(QMainWindow):
             return
         target_dir = self._selected_directory_for_new_items()
         path = os.path.join(target_dir, name.strip() + ".testlog")
+        if os.path.exists(path):
+            # Saving would replace the existing note's content.
+            self._warn_item_exists(self._tr("New file"), path)
+            return
         self.current_file = path
         self._new_session()
         self.current_status = DEFAULT_TESTLOG_STATUS
