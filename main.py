@@ -753,7 +753,7 @@ class Editor(QTextEdit):
 
     def insert_current_time(self):
         cursor = self.textCursor()
-        cursor.insertText(QTime.currentTime().toString("HH:mm:ss"))
+        cursor.insertText(QTime.currentTime().toString("HH:mm"))
         self.setTextCursor(cursor)
 
     def insert_current_date_time(self):
@@ -2621,6 +2621,7 @@ class MainWindow(QMainWindow):
         self.date_menu_action.setShortcut("Ctrl+Alt+D")
         self.date_menu_action.triggered.connect(self.editor.insert_current_date)
         self.time_menu_action = QAction(self)
+        self.time_menu_action.setShortcut("Ctrl+Alt+T")
         self.time_menu_action.triggered.connect(self.editor.insert_current_time)
         self.date_time_menu_action = QAction(self)
         self.date_time_menu_action.triggered.connect(self.editor.insert_current_date_time)

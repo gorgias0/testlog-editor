@@ -1,9 +1,10 @@
 import os
+import re
 import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTime
 from PySide6.QtGui import QKeyEvent, QTextCursor
 from PySide6.QtWidgets import QApplication
 
@@ -219,3 +220,16 @@ def test_tab_can_use_four_spaces_or_tabs():
     editor._handle_tab()
 
     assert editor.toPlainText() == "alpha\t"
+
+
+def test_insert_current_time_uses_hours_and_minutes():
+    editor = _editor_with_cursor_at_end("- ")
+    before = QTime.currentTime()
+
+    editor.insert_current_time()
+
+    inserted = editor.toPlainText()[2:]
+    assert re.fullmatch(r"\d{2}:\d{2}", inserted)
+    # Allow the minute to roll over between reading the clock and inserting.
+    after = QTime.currentTime()
+    assert inserted in {before.toString("HH:mm"), after.toString("HH:mm")}
