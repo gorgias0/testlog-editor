@@ -37,10 +37,16 @@ case "$MODE" in
     ;;
 esac
 
+# In a sed replacement "&" means the matched text and "\" and "|" are special too, so a path
+# such as "/home/u/R&D" must be escaped first.
+sed_escape() {
+  printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
+}
+
 sed \
-  -e "s|__EXEC__|$EXEC_CMD|" \
-  -e "s|__ICON__|$ICON_FILE|" \
-  -e "s|__ROOT_DIR__|$ROOT_DIR|" \
+  -e "s|__EXEC__|$(sed_escape "$EXEC_CMD")|" \
+  -e "s|__ICON__|$(sed_escape "$ICON_FILE")|" \
+  -e "s|__ROOT_DIR__|$(sed_escape "$ROOT_DIR")|" \
   "$DESKTOP_FILE" > "$TARGET_FILE"
 
 chmod +x "$TARGET_FILE"
