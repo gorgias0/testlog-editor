@@ -3504,7 +3504,8 @@ class MainWindow(QMainWindow):
     def _apply_sidebar_search(self):
         text = self.sidebar_search.text()
         has_search = bool(text)
-        if has_search and not getattr(self, "_tree_expanded_paths_before_search", None):
+        # Remember the open folders once per search; an empty set (nothing open) counts as remembered.
+        if has_search and getattr(self, "_tree_expanded_paths_before_search", None) is None:
             self._tree_expanded_paths_before_search = self._expanded_tree_paths()
         self.fs_proxy_model.set_search(text)
         self._set_tree_workspace_root()
@@ -3551,9 +3552,9 @@ class MainWindow(QMainWindow):
                 if path in expanded_paths:
                     self.tree.expand(index)
                     walk(index)
-                else:
-                    self.tree.collapse(index)
 
+        # Collapse first: folders the search opened inside collapsed parents would otherwise stay open.
+        self.tree.collapseAll()
         walk(self.tree.rootIndex())
 
     def keyPressEvent(self, event):
