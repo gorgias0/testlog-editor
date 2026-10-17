@@ -35,6 +35,20 @@ def collect_referenced_image_filenames(note_content):
     return referenced
 
 
+INVALID_NAME_CHARACTERS = set('<>:"/\\|?*')
+WINDOWS_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{n}" for n in range(1, 10)), *(f"LPT{n}" for n in range(1, 10))}
+
+
+def is_valid_item_name(name):
+    # Names must work on Windows too (workspaces may be synced there): no path separators or
+    # reserved characters, no trailing dot or space, and none of the reserved device names.
+    if not name or name in {".", ".."} or name != name.rstrip(". "):
+        return False
+    if any(character in INVALID_NAME_CHARACTERS or ord(character) < 32 for character in name):
+        return False
+    return name.split(".")[0].upper() not in WINDOWS_RESERVED_NAMES
+
+
 def normalize_testlog_status(status):
     normalized = (status or "").strip().lower()
     return normalized if normalized in TESTLOG_STATUS_OPTIONS else DEFAULT_TESTLOG_STATUS

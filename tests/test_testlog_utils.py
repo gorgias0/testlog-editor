@@ -12,6 +12,7 @@ from testlog_utils import (
     set_testlog_tags,
     get_testlog_status,
     guess_markdown_from_plain_text,
+    is_valid_item_name,
     normalize_testlog_status,
     resolve_preview_image_path,
     set_testlog_status,
@@ -193,3 +194,16 @@ def test_read_testlog_header_from_archive_defaults_for_broken_file(tmp_path):
     path.write_text("hello", encoding="utf-8")
 
     assert read_testlog_header_from_archive(str(path)) == (DEFAULT_TESTLOG_STATUS, [])
+
+
+@pytest.mark.parametrize("name", ["Report", "2026-10-17 smoke", "möte (v2)", "a.b", "Archive"])
+def test_valid_item_names(name):
+    assert is_valid_item_name(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["", ".", "..", "Bug/login", "Bug\\login", "a?b", "Bug: login", "a*b", 'a"b', "a<b", "a|b", "trailing.", "trailing ", "CON", "con.txt", "LPT1", "tab\there"],
+)
+def test_invalid_item_names(name):
+    assert not is_valid_item_name(name)

@@ -66,6 +66,7 @@ from testlog_utils import (
     get_testlog_status,
     get_testlog_tags,
     guess_markdown_from_plain_text,
+    is_valid_item_name,
     highlight_fulltext_snippet,
     normalize_testlog_status,
     normalize_testlog_tags,
@@ -2478,7 +2479,12 @@ class MainWindow(QMainWindow):
         self._retranslate_ui()
 
     def _new_session(self, session_dir=None):
+        # Each note gets a temporary folder for its images; remove the previous one, which
+        # otherwise stayed behind in the temp folder with the note's text and images.
+        previous_session = getattr(self, "session_dir", None)
         self.session_dir = session_dir or tempfile.mkdtemp(prefix="testlog_")
+        if previous_session and os.path.normcase(previous_session) != os.path.normcase(self.session_dir):
+            shutil.rmtree(previous_session, ignore_errors=True)
         self.images_dir = os.path.join(self.session_dir, "images")
         os.makedirs(self.images_dir, exist_ok=True)
         self._preview_loaded = False
@@ -3718,6 +3724,7 @@ class MainWindow(QMainWindow):
             self.settings.setValue("inner_splitter", self.inner_splitter.saveState())
             self.settings.setValue("inner_splitter_sizes", self.inner_splitter.saveState())
         self.settings.setValue("view_mode", self.view_mode.value)
+        shutil.rmtree(self.session_dir, ignore_errors=True)
         super().closeEvent(event)
 
     def toggle_editor_preview(self):
@@ -4345,6 +4352,18 @@ class MainWindow(QMainWindow):
         self._refresh_sidebar_sort()
         return True
 
+    def _check_item_name(self, name, title):
+        # An invalid name used to leave a new note that could never be saved, and with it a
+        # window that could not be closed.
+        if is_valid_item_name(name):
+            return True
+        QMessageBox.warning(
+            self,
+            title,
+            self._tr('"{name}" is not a valid name. Avoid < > : " / \\ | ? * and a trailing dot or space.').format(name=name),
+        )
+        return False
+
     def _is_trash_root(self, path):
         return bool(self.workspace_dir) and os.path.normcase(os.path.abspath(path)) == os.path.normcase(trash_dir(self.workspace_dir))
 
@@ -4408,6 +4427,8 @@ class MainWindow(QMainWindow):
 
         new_name = dialog.textValue()
         if not new_name.strip():
+            return
+        if not self._check_item_name(new_name.strip(), self._tr("Rename")):
             return
 
         new_path = os.path.join(
@@ -4482,10 +4503,19 @@ class MainWindow(QMainWindow):
             return
 
         if permanent:
-            if os.path.isdir(path):
-                shutil.rmtree(path)
-            else:
-                os.remove(path)
+            try:
+                if os.path.isdir(path):
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
+            except OSError:
+                logger.exception("Could not delete %s", path)
+                QMessageBox.warning(
+                    self,
+                    self._tr("Confirm Delete"),
+                    self._tr("Could not delete {name}.").format(name=filename),
+                )
+                return
         else:
             # Save the open note first so Trash holds its latest text.
             if was_open and not self._flush_pending_changes():
@@ -4723,6 +4753,8 @@ class MainWindow(QMainWindow):
         name = dialog.textValue()
         if not name.strip():
             return
+        if not self._check_item_name(name.strip(), self._tr("New file")):
+            return
         target_dir = self._selected_directory_for_new_items()
         path = os.path.join(target_dir, name.strip() + ".testlog")
         if os.path.exists(path):
@@ -4754,9 +4786,16 @@ class MainWindow(QMainWindow):
         name = dialog.textValue()
         if not name.strip():
             return
+        if not self._check_item_name(name.strip(), self._tr("New folder")):
+            return
         target_dir = self._selected_directory_for_new_items()
         new_path = os.path.join(target_dir, name.strip())
-        os.makedirs(new_path, exist_ok=True)
+        try:
+            os.makedirs(new_path, exist_ok=True)
+        except OSError:
+            logger.exception("Could not create folder %s", new_path)
+            QMessageBox.warning(self, self._tr("New folder"), self._tr("Could not create {name}.").format(name=name.strip()))
+            return
         self._select_file_in_tree(new_path)
         self.tree.setFocus()
 
@@ -4992,7 +5031,6 @@ class MainWindow(QMainWindow):
                 self.autosave_timer.start()
             return False
 
-        shutil.rmtree(self.session_dir, ignore_errors=True)
         self._new_session(session_dir)
 
         self.current_status = DEFAULT_TESTLOG_STATUS
