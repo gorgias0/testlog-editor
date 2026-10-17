@@ -260,3 +260,46 @@ def test_available_path(tmp_path):
 
     assert available_path(str(tmp_path / "b.testlog")) == str(tmp_path / "b.testlog")
     assert available_path(str(tmp_path / "a.testlog")) == str(tmp_path / "a 3.testlog")
+
+
+def test_item_from_a_recreated_folder_does_not_land_inside_the_trashed_folder(workspace):
+    move_to_trash(workspace, workspace / "tdialog", now=NOW - 25 * DAY)
+    (workspace / "tdialog").mkdir()
+    (workspace / "tdialog" / "new.testlog").write_text("new", encoding="utf-8")
+
+    destination = move_to_trash(workspace, workspace / "tdialog" / "new.testlog", now=NOW)
+
+    assert destination == str(workspace / "Trash" / "tdialog 2" / "new.testlog")
+    assert _records(workspace)["tdialog 2/new.testlog"]["original"] == "tdialog/new.testlog"
+    assert sorted(os.listdir(workspace / "Trash" / "tdialog")) == ["checkout.testlog", "login.testlog"]
+    assert restore_from_trash(workspace, destination) == str(workspace / "tdialog" / "new.testlog")
+
+
+def test_new_item_purged_on_its_own_clock_not_its_neighbours(workspace):
+    folder = move_to_trash(workspace, workspace / "tdialog", now=NOW - 25 * DAY)
+    for root, _, files in os.walk(folder):
+        for name in files:
+            _age(os.path.join(root, name), 40)
+    (workspace / "tdialog").mkdir()
+    (workspace / "tdialog" / "new.testlog").write_text("new", encoding="utf-8")
+    newer = move_to_trash(workspace, workspace / "tdialog" / "new.testlog", now=NOW)
+    _age(newer, 40)
+
+    purged = purge_trash(workspace, now=NOW + 6 * DAY)
+
+    assert purged == [folder]
+    assert os.path.exists(newer)
+
+
+def test_purge_keeps_folder_with_newer_nested_record(workspace):
+    folder = move_to_trash(workspace, workspace / "tdialog", now=NOW - 31 * DAY)
+    for root, _, files in os.walk(folder):
+        for name in files:
+            _age(os.path.join(root, name), 40)
+    records_path = workspace / "Trash" / TRASH_RECORD_NAME
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    records["tdialog/login.testlog"] = {"original": "tdialog/login.testlog", "trashed_at": NOW - 2 * DAY}
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+
+    assert purge_trash(workspace, now=NOW) == []
+    assert os.path.isdir(folder)

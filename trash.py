@@ -123,13 +123,13 @@ def move_to_trash(workspace, path, now=None):
         raise TrashError(f"{path_abs} is already in Trash")
 
     relative = os.path.relpath(path_abs, workspace_abs)
-    destination = available_path(os.path.join(trash, relative))
+    records = _load_records(trash)
+    destination = available_path(_destination_outside_trashed_folders(trash, records, relative))
     os.makedirs(os.path.dirname(destination), exist_ok=True)
     os.rename(path_abs, destination)
 
     # The item is safely in Trash at this point; a lost record only means a fresh 30 days.
     try:
-        records = _load_records(trash)
         records[_key(trash, destination)] = {
             "trashed_at": time.time() if now is None else now,
             "original": relative.replace(os.sep, "/"),
@@ -138,6 +138,19 @@ def move_to_trash(workspace, path, now=None):
     except OSError:
         logger.warning("Could not record %s in the Trash records", destination, exc_info=True)
     return destination
+
+
+def _destination_outside_trashed_folders(trash, records, relative):
+    # A new item must not land inside a folder that is itself a Trash item (for example a
+    # re-created "Sprint/x" after "Sprint" was trashed): it would share that folder's 30 days
+    # and come back with it on restore. Give the trashed folder's name a number instead.
+    parts = relative.split(os.sep)
+    for depth in range(1, len(parts)):
+        if "/".join(parts[:depth]) in records:
+            taken = os.path.join(trash, *parts[:depth])
+            parts[depth - 1] = os.path.basename(available_path(taken))
+            break
+    return os.path.join(trash, *parts)
 
 
 def _remove_empty_parents(trash, directory):
@@ -251,7 +264,9 @@ def purge_trash(workspace, now=None, retention_days=RETENTION_DAYS):
             records.pop(key, None)
             continue
         try:
-            last_activity = max(records[key]["trashed_at"], _newest_mtime(item))
+            # Records nested inside a folder item (left by older versions) also keep it alive.
+            nested_times = [value["trashed_at"] for other, value in records.items() if other.startswith(key + "/")]
+            last_activity = max(records[key]["trashed_at"], _newest_mtime(item), *nested_times)
             if last_activity >= cutoff:
                 continue
             _remove(item)

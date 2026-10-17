@@ -2641,7 +2641,6 @@ class MainWindow(QMainWindow):
             return
         for old_path, new_path in moves:
             self._update_tracked_paths(old_path, new_path)
-            self._rewrite_recent_paths(old_path, new_path)
         if moves:
             self.refresh_pinned()
             logger.info("Merged %d item(s) from legacy archive folders in %s", len(moves), self.workspace_dir)
@@ -3096,9 +3095,15 @@ class MainWindow(QMainWindow):
         self.timer.start()
         self.autosave_timer.start()
 
+    def _apply_pending_tags_edit(self):
+        # Shortcuts and menu actions do not end editing in the field, so typed tags would
+        # otherwise be applied later to whichever note is open by then.
+        if hasattr(self, "tags_edit") and self.tags_edit.isModified():
+            self._on_tags_edit_finished()
+
     def _sync_tags_from_editor(self):
-        # Follow edits to the header, but never overwrite the field while the user types in it.
-        if not hasattr(self, "tags_edit") or self.tags_edit.hasFocus():
+        # Follow edits to the header, but never overwrite tags the user is still typing.
+        if not hasattr(self, "tags_edit") or (self.tags_edit.hasFocus() and self.tags_edit.isModified()):
             return
         text = format_testlog_tags(get_testlog_tags(self.editor.toPlainText()))
         if self.tags_edit.text() != text:
@@ -4481,7 +4486,18 @@ class MainWindow(QMainWindow):
         # Look up the neighbour before the move, while the archived file is still in the tree.
         next_path = self._next_file_in_same_folder(path)
         new_path = self._available_path(new_path)
-        os.rename(path, new_path)
+        try:
+            os.rename(path, new_path)
+        except OSError:
+            logger.exception("Could not move %s to the archive", path)
+            if current_status != "done":
+                self.set_file_status(path, current_status)
+            QMessageBox.warning(
+                self,
+                self._tr("Archive"),
+                self._tr("Could not move {name}.").format(name=os.path.basename(path)),
+            )
+            return
         self._update_tracked_paths(path, new_path)
         self.refresh_pinned()
 
@@ -4570,6 +4586,8 @@ class MainWindow(QMainWindow):
         if changed:
             self.pinned_files = updated_pins
             self._save_pinned_files()
+
+        self._rewrite_recent_paths(old_path, new_path)
 
         if self.current_file:
             current_abs = os.path.abspath(self.current_file)
@@ -4810,6 +4828,7 @@ class MainWindow(QMainWindow):
         return self.editor.document().isModified()
 
     def _flush_pending_changes(self):
+        self._apply_pending_tags_edit()
         if not self._editor_has_unsaved_changes():
             return True
 
@@ -4936,6 +4955,7 @@ class MainWindow(QMainWindow):
         self.tree.scrollTo(index)
 
     def save_file(self):
+        self._apply_pending_tags_edit()
         if self.current_file:
             return self._try_write_testlog(self.current_file)
         else:
