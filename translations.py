@@ -184,6 +184,8 @@ TRANSLATIONS = {
         "Format HTML": "Formatera HTML",
         "Guess Markdown From Plain Text": "Gissa Markdown från vanlig text",
         "Invalid Base64": "Fel: ogiltig Base64-sträng",
+        "Base64 decodes to data that is not UTF-8 text": "Base64 avkodas till data som inte är UTF-8-text",
+        "Invalid URL encoding": "Ogiltig URL-kodning",
         "Invalid JSON: {error}": "Fel: ogiltig JSON – {error}",
         "Best-effort JSON formatting applied: {error}": "Bästa möjliga JSON-formatering tillämpad: {error}",
         "UUID": "UUID",

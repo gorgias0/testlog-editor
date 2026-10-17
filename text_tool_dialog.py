@@ -4,7 +4,6 @@ import random
 import re
 import uuid
 from datetime import date, timedelta
-from urllib.parse import quote as url_quote, unquote as url_unquote
 
 from faker import Faker
 from PySide6.QtCore import QSettings, Qt, Signal
@@ -35,6 +34,13 @@ from PySide6.QtWidgets import (
 from document_find_bar import DocumentFindBar
 from html_tools import pretty_print_html
 from json_tools import format_json_best_effort
+from text_transforms import (
+    TransformError,
+    ascii_email_name,
+    decode_base64_text,
+    decode_url_component,
+    encode_url_component,
+)
 
 TESTDATA_PROFILES = {
     "se": {
@@ -742,9 +748,14 @@ class TextToolDialog(QDialog):
         layout.addLayout(form_layout)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, parent=dialog)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(self._tr("OK"))
+        ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        ok_button.setText(self._tr("OK"))
         buttons.accepted.connect(dialog.accept)
         layout.addWidget(buttons)
+        # The validator only marks "0" as unfinished, so OK must wait for a valid length.
+        length_input.textChanged.connect(
+            lambda text: ok_button.setEnabled(not text or length_input.hasAcceptableInput())
+        )
 
         if dialog.exec() == QDialog.DialogCode.Accepted:
             length = int(length_input.text()) if length_input.text() else 100
@@ -895,19 +906,23 @@ class TextToolDialog(QDialog):
         self.text_area.setPlainText(encoded)
 
     def _transform_base64_decode(self):
-        text = self.text_area.toPlainText().strip()
         try:
-            decoded = base64.b64decode(text, validate=True).decode("utf-8")
-        except Exception:
-            QMessageBox.warning(self, self._tr("Transform"), self._tr("Invalid Base64"))
+            decoded = decode_base64_text(self.text_area.toPlainText())
+        except TransformError as error:
+            QMessageBox.warning(self, self._tr("Transform"), self._tr(str(error)))
             return
         self.text_area.setPlainText(decoded)
 
     def _transform_url_encode(self):
-        self.text_area.setPlainText(url_quote(self.text_area.toPlainText()))
+        self.text_area.setPlainText(encode_url_component(self.text_area.toPlainText()))
 
     def _transform_url_decode(self):
-        self.text_area.setPlainText(url_unquote(self.text_area.toPlainText()))
+        try:
+            decoded = decode_url_component(self.text_area.toPlainText())
+        except TransformError as error:
+            QMessageBox.warning(self, self._tr("Transform"), self._tr(str(error)))
+            return
+        self.text_area.setPlainText(decoded)
 
     def _transform_format_json(self):
         formatted, valid, error = format_json_best_effort(self.text_area.toPlainText())
@@ -1111,16 +1126,7 @@ class TextToolDialog(QDialog):
         return f"{country_code} {compact}"
 
     def _normalize_email_name(self, text):
-        translation = str.maketrans({
-            "å": "a",
-            "ä": "a",
-            "ö": "o",
-            "Å": "a",
-            "Ä": "a",
-            "Ö": "o",
-        })
-        normalized = text.translate(translation).lower()
-        return re.sub(r"[^a-z0-9]+", "", normalized)
+        return ascii_email_name(text)
 
     def _copy_all_text(self):
         text_area = self._current_text_area()

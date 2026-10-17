@@ -50,6 +50,7 @@ from diff_window import DiffWindow
 from document_find_bar import DocumentFindBar
 from json_tools import format_json_best_effort
 from text_tool_dialog import TextToolDialog
+from text_transforms import TransformError, decode_base64_text, decode_url_component, encode_url_component
 from testlog_archive import (
     extract_testlog_archive,
     read_testlog_note_text,
@@ -3967,19 +3968,24 @@ class MainWindow(QMainWindow):
     def _transform_editor_base64_decode(self):
         text, replace_selection = self._editor_selected_or_all_text()
         try:
-            decoded = base64.b64decode(text.strip(), validate=True).decode("utf-8")
-        except Exception:
-            QMessageBox.warning(self, self._tr("Transform"), self._tr("Invalid Base64"))
+            decoded = decode_base64_text(text)
+        except TransformError as error:
+            QMessageBox.warning(self, self._tr("Transform"), self._tr(str(error)))
             return
         self._replace_editor_selected_or_all_text(decoded, replace_selection)
 
     def _transform_editor_url_encode(self):
         text, replace_selection = self._editor_selected_or_all_text()
-        self._replace_editor_selected_or_all_text(url_quote(text), replace_selection)
+        self._replace_editor_selected_or_all_text(encode_url_component(text), replace_selection)
 
     def _transform_editor_url_decode(self):
         text, replace_selection = self._editor_selected_or_all_text()
-        self._replace_editor_selected_or_all_text(url_unquote(text), replace_selection)
+        try:
+            decoded = decode_url_component(text)
+        except TransformError as error:
+            QMessageBox.warning(self, self._tr("Transform"), self._tr(str(error)))
+            return
+        self._replace_editor_selected_or_all_text(decoded, replace_selection)
 
     def _transform_editor_format_json(self):
         text, replace_selection = self._editor_selected_or_all_text()
