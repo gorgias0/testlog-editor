@@ -56,3 +56,17 @@ def test_extending_the_term_stays_on_the_current_match():
 
     assert bar.counter_label.text() == "1 / 2"
     assert editor.textCursor().selectionStart() == 0
+
+
+def test_multi_line_selection_does_not_replace_the_search_term():
+    editor, bar = _bar_with_text("one\ntwo")
+    bar.open_bar("two")
+    bar.close_bar()
+    cursor = editor.textCursor()
+    cursor.setPosition(0)
+    cursor.setPosition(7, QTextCursor.MoveMode.KeepAnchor)
+    editor.setTextCursor(cursor)
+
+    bar.open_bar()
+
+    assert "\n" not in bar.find_input.text()

@@ -410,3 +410,80 @@ def test_highlighter_stays_fast_on_long_lines_with_unmatched_markers():
     highlighter.rehighlight()
 
     assert time.perf_counter() - started < 1.5
+
+
+def _selection(editor):
+    cursor = editor.textCursor()
+    return editor.toPlainText()[cursor.selectionStart():cursor.selectionEnd()]
+
+
+def test_bold_toggles_on_and_off_and_keeps_the_selection():
+    editor = _editor_with_cursor_at_end("x a y")
+    _select_text(editor, "a")
+
+    editor.format_bold()
+    assert editor.toPlainText() == "x **a** y"
+    assert _selection(editor) == "a"
+
+    editor.format_bold()
+    assert editor.toPlainText() == "x a y"
+    assert _selection(editor) == "a"
+
+
+def test_bold_removes_markers_when_they_are_selected_too():
+    editor = _editor_with_cursor_at_end("x **a** y")
+    _select_text(editor, "**a**")
+
+    editor.format_bold()
+
+    assert editor.toPlainText() == "x a y"
+    assert _selection(editor) == "a"
+
+
+def test_italic_does_not_strip_bold_markers():
+    editor = _editor_with_cursor_at_end("x **a** y")
+    _select_text(editor, "a")
+
+    editor.format_italic()
+
+    assert editor.toPlainText() == "x ***a*** y"
+
+
+def test_empty_marker_pair_is_removed_by_the_same_shortcut():
+    editor = _editor_with_cursor_at_end("x ")
+
+    editor.format_bold()
+    assert editor.toPlainText() == "x ****"
+    editor.format_bold()
+
+    assert editor.toPlainText() == "x "
+
+
+def test_tab_and_shift_tab_keep_the_cursor_in_the_text():
+    editor = _editor_with_cursor_at_end("- item")
+    _set_cursor(editor, 4)
+
+    editor._handle_tab()
+    assert editor.toPlainText() == "  - item"
+    assert editor.textCursor().positionInBlock() == 6
+
+    editor._handle_shift_tab()
+    assert editor.toPlainText() == "- item"
+    assert editor.textCursor().positionInBlock() == 4
+
+
+def test_bold_markers_keep_the_marker_colour():
+    from PySide6.QtGui import QTextDocument
+
+    from main import MarkdownHighlighter
+
+    _app()
+    document = QTextDocument()
+    highlighter = MarkdownHighlighter(document)
+    document.setPlainText("x **bold** y")
+    highlighter.rehighlight()
+
+    colours = {(f.start, f.length): f.format.foreground().color().name() for f in document.firstBlock().layout().formats()}
+    marker_colour = highlighter.emphasis_marker_format.foreground().color().name()
+    assert colours[(2, 2)] == marker_colour
+    assert colours[(8, 2)] == marker_colour

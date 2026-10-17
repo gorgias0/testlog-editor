@@ -165,6 +165,10 @@ class DocumentFindBar(QWidget):
         selected_text = ""
         if editor is not None:
             selected_text = editor.textCursor().selectedText().replace("\u2029", "\n")
+            # The search cannot match across lines, so a multi-line selection would always give
+            # "No Matches"; keep the previous term instead.
+            if "\n" in selected_text:
+                selected_text = ""
 
         self.setVisible(True)
         if hasattr(self, "page_down_shortcut"):

@@ -536,12 +536,15 @@ class Editor(QTextEdit):
         line_text = block.text()
 
         if self._is_list_line(line_text):
-            # Indent list item
-            indent_size = len(self._indent_prefix_for_line(line_text))
+            # Indent list item; the cursor keeps its place in the text, shifted by the change.
+            column = cursor.positionInBlock()
+            prefix_size = utf16_length(self._indent_prefix_for_line(line_text))
+            leading = utf16_length(self._get_leading_whitespace(line_text))
             cursor.beginEditBlock()
-            self._indent_block(block)
+            change = self._indent_block(block)
             cursor.endEditBlock()
-            cursor.setPosition(block.position() + indent_size)
+            shift = change if column > leading else prefix_size
+            cursor.setPosition(block.position() + max(0, column + shift))
             self._set_text_cursor_visible(cursor)
         else:
             # Default tab
@@ -556,13 +559,16 @@ class Editor(QTextEdit):
         block = cursor.block()
         line_text = block.text()
 
-        # Remove one indentation unit from the start of the line
-        cursor.movePosition(cursor.MoveOperation.StartOfLine)
-        self._set_text_cursor_visible(cursor)
+        # Remove one indentation unit from the start of the line; the cursor keeps its place.
+        column = cursor.positionInBlock()
         chars_to_remove = self._unindent_char_count(line_text)
-
+        cursor.beginEditBlock()
+        cursor.setPosition(block.position())
         for _ in range(chars_to_remove):
             cursor.deleteChar()
+        cursor.endEditBlock()
+        cursor.setPosition(block.position() + max(0, column - chars_to_remove))
+        self._set_text_cursor_visible(cursor)
 
     def _selected_block_range(self, cursor):
         selection_start = cursor.selectionStart()
@@ -695,37 +701,62 @@ class Editor(QTextEdit):
         self._set_text_cursor_visible(cursor)
 
     def format_bold(self):
-        cursor = self.textCursor()
-        if cursor.hasSelection():
-            text = cursor.selectedText()
-            cursor.removeSelectedText()
-            cursor.insertText(f'**{text}**')
-        else:
-            cursor.insertText('****')
-            cursor.movePosition(cursor.MoveOperation.Left, cursor.MoveMode.MoveAnchor, 2)
-            self.setTextCursor(cursor)
+        self._toggle_inline_marker("**")
 
     def format_italic(self):
-        cursor = self.textCursor()
-        if cursor.hasSelection():
-            text = cursor.selectedText()
-            cursor.removeSelectedText()
-            cursor.insertText(f'*{text}*')
-        else:
-            cursor.insertText('**')
-            cursor.movePosition(cursor.MoveOperation.Left, cursor.MoveMode.MoveAnchor, 1)
-            self.setTextCursor(cursor)
+        self._toggle_inline_marker("*")
 
     def format_inline_code(self):
+        self._toggle_inline_marker("`")
+
+    def _marker_at(self, position, marker):
+        # True when exactly this marker sits at position; a lone "*" next to another "*" is part
+        # of "**" (bold), not italic.
+        doc = self.document()
+        if position < 0 or position + len(marker) > doc.characterCount() - 1:
+            return False
+        if "".join(doc.characterAt(position + offset) for offset in range(len(marker))) != marker:
+            return False
+        if marker == "*":
+            return doc.characterAt(position - 1) != "*" and doc.characterAt(position + 1) != "*"
+        return True
+
+    def _toggle_inline_marker(self, marker):
+        # Wrap the selection and keep it selected, so pressing the shortcut again removes the
+        # markers again (selected with the text or just around it).
         cursor = self.textCursor()
-        if cursor.hasSelection():
-            text = cursor.selectedText()
+        size = len(marker)
+        start, end = cursor.selectionStart(), cursor.selectionEnd()
+        selected = cursor.selectedText()
+        cursor.beginEditBlock()
+        if cursor.hasSelection() and self._marker_at(start - size, marker) and self._marker_at(end, marker):
+            for position in (end, start - size):
+                cursor.setPosition(position)
+                cursor.setPosition(position + size, QTextCursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
+            new_start, new_end = start - size, end - size
+        elif (
+            cursor.hasSelection()
+            and len(selected) >= 2 * size + 1
+            and self._marker_at(start, marker)
+            and self._marker_at(end - size, marker)
+        ):
+            inner = selected[size:-size]
+            cursor.insertText(inner)
+            new_start, new_end = start, start + utf16_length(inner)
+        elif not cursor.hasSelection() and self._marker_at(start - size, marker) and self._marker_at(start, marker):
+            cursor.setPosition(start - size)
+            cursor.setPosition(start + size, QTextCursor.MoveMode.KeepAnchor)
             cursor.removeSelectedText()
-            cursor.insertText(f'`{text}`')
+            new_start = new_end = start - size
         else:
-            cursor.insertText('``')
-            cursor.movePosition(cursor.MoveOperation.Left, cursor.MoveMode.MoveAnchor, 1)
-            self.setTextCursor(cursor)
+            cursor.insertText(f"{marker}{selected}{marker}")
+            new_start = start + size
+            new_end = new_start + utf16_length(selected)
+        cursor.endEditBlock()
+        cursor.setPosition(new_start)
+        cursor.setPosition(new_end, QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(cursor)
 
     def format_underline(self):
         cursor = self.textCursor()
@@ -1185,11 +1216,12 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             (2, self.inline_code_format),
             (3, self.emphasis_marker_format),
         ])
-        self._apply_match_format(text, r"(\*\*|__)(?=\S)((?:(?!\1).)+?[*_]*)(?<=\S)\1", [
-            (1, self.emphasis_marker_format),
-            (2, self.bold_text_format),
-            (0, self.bold_text_format),
-        ])
+        # Bold text first, then both markers, so the markers keep their own colour.
+        for match in re.finditer(r"(\*\*|__)(?=\S)((?:(?!\1).)+?[*_]*)(?<=\S)\1", text):
+            marker_length = len(match.group(1))
+            self.setFormat(match.start(), match.end() - match.start(), self.bold_text_format)
+            self.setFormat(match.start(), marker_length, self.emphasis_marker_format)
+            self.setFormat(match.end() - marker_length, marker_length, self.emphasis_marker_format)
         self._apply_match_format(text, r"(?<!\*)\*(?!\*)(?=\S)([^*]+?)(?<=\S)\*(?!\*)|(?<!_)_(?!_)(?=\S)([^_]+?)(?<=\S)_(?!_)", [
             (1, self.italic_text_format),
             (2, self.italic_text_format),
