@@ -68,7 +68,7 @@ def _item_path(trash, key):
     return os.path.join(trash, *key.split("/"))
 
 
-def _is_record_file(name):
+def is_trash_record_file(name):
     return name == TRASH_RECORD_NAME or (name.startswith(TRASH_RECORD_NAME + ".") and name.endswith(".tmp"))
 
 
@@ -237,7 +237,7 @@ def purge_trash(workspace, now=None, retention_days=RETENTION_DAYS):
             dirs[:] = []
             continue
         for name in files:
-            if not root_key and _is_record_file(name):
+            if not root_key and is_trash_record_file(name):
                 continue
             key = f"{root_key}/{name}" if root_key else name
             if key not in records:

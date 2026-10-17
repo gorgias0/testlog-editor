@@ -26,6 +26,15 @@ FOLDER_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 56"
   <path d="M0 16 L64 16 L64 50 Q64 56 58 56 L6 56 Q0 56 0 50 Z" fill="#fbbf24"/>
 </svg>'''
 
+TRASH_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 56">
+  <rect x="22" y="0" width="20" height="7" rx="3" fill="#64748b"/>
+  <rect x="8" y="5" width="48" height="8" rx="3" fill="#64748b"/>
+  <path d="M13 16 L51 16 L47 52 Q46.5 56 42 56 L22 56 Q17.5 56 17 52 Z" fill="#94a3b8"/>
+  <line x1="25" y1="23" x2="26" y2="48" stroke="#64748b" stroke-width="3" stroke-linecap="round"/>
+  <line x1="32" y1="23" x2="32" y2="48" stroke="#64748b" stroke-width="3" stroke-linecap="round"/>
+  <line x1="39" y1="23" x2="38" y2="48" stroke="#64748b" stroke-width="3" stroke-linecap="round"/>
+</svg>'''
+
 FOLDER_PINNED_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 56">
   <path d="M0 10 Q0 4 6 4 L20 4 L26 0 L58 0 Q64 0 64 6 L64 50 Q64 56 58 56 L6 56 Q0 56 0 50 Z" fill="#f59e0b"/>
   <path d="M0 16 L64 16 L64 50 Q64 56 58 56 L6 56 Q0 56 0 50 Z" fill="#fbbf24"/>

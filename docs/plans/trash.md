@@ -17,7 +17,8 @@ How to see it working: delete a note, open the Trash folder in the sidebar and f
 - [x] (2026-10-17) Milestone 1: `trash.py` (`move_to_trash`, `restore_from_trash`, `purge_trash`, `empty_trash`, `is_in_trash`, `skip_trash_dirs`, `available_path`, record file handling); `MainWindow._available_path` now delegates to `trash.available_path`. `tests/test_trash.py` (26 tests); 134 passed. Three deliberate mutations of `trash.py` (ignore modification time, clean folders inside trashed folders, trust a record pointing outside the workspace) were each caught by exactly one test.
 - [x] (2026-10-17) Milestone 1 committed as `f86b87e`.
 - [x] (2026-10-17) Milestone 2: `delete_item` moves to Trash outside it (new dialog texts) and deletes permanently inside it, refuses the Trash folder itself, and saves the open note first if it is being trashed; `_purge_workspace_trash` runs in `_set_workspace`; `skip_trash_dirs` in all five workspace walks, and the recent-files loop in `_open_most_recent_testlog` skips notes in Trash; 3 Swedish strings. 134 passed. Scripted real-window run (see `Artifacts and Notes`).
-- [ ] Milestone 3: Trash in the sidebar: localized label, bin icon, sorted last, record file hidden; Restore and Empty Trash in the right-click menu; translations; scripted check and screenshots.
+- [x] (2026-10-17) Milestone 2 committed as `e6e09ff`.
+- [x] (2026-10-17) Milestone 3: `TRASH_ICON_SVG`; `WorkspaceFileSystemModel.trash_label`, `trash_icon`, `is_trash_dir`; Trash sorted last (`_sort_rank` rank 3); record file hidden by the proxy (`trash.is_trash_record_file`, renamed from the private `_is_record_file`); right-click menus for the Trash folder (Empty Trash only) and items in it (Restore, Delete); `restore_item`, `empty_workspace_trash`, `_is_trash_root`, `_is_trashed_item`; `rename_item` refuses the Trash folder; 6 Swedish strings (one more than planned: "Could not empty Trash."). 134 passed. Scripted real-window run and screenshots (see `Artifacts and Notes`).
 - [ ] Milestone 4: `README.md` and `AGENTS.md`; full test run; retrospective; manual check on a real display.
 
 
@@ -25,6 +26,8 @@ How to see it working: delete a note, open the Trash folder in the sidebar and f
 
 - Observation: recording empty folders found during a purge, as first planned, would keep the empty mirror folder left behind after a restore (for example `Trash/tdialog/` after restoring its only note) for another 30 days instead of cleaning it up.
   Evidence: found while writing `purge_trash`; see the Decision Log entry below.
+- Observation: for scripted checks, assigning a replacement to `QMenu.exec` on the PySide6 class has no effect (the real, blocking menu still opens), so a check script hangs. Replacing `main.QMenu` with a small Python subclass that overrides `exec` works.
+  Evidence: a probe script that set `QMenu.exec = lambda ...` never printed from the lambda and timed out in `menu.exec(...)`.
 
 
 ## Decision Log
@@ -68,7 +71,9 @@ How to see it working: delete a note, open the Trash folder in the sidebar and f
 
 Milestone 1 (2026-10-17): every Trash rule exists as a tested, Qt-free function. Nothing in the app calls it yet apart from the shared `available_path`.
 
-Milestone 2 (2026-10-17): Delete now moves to Trash, items in Trash are kept out of every search and scan, deleting inside Trash is permanent, and the 30-day purge runs when a workspace opens. Trash still looks like an ordinary folder in the sidebar and has no Restore yet; Milestones 3-4 remain.
+Milestone 2 (2026-10-17): Delete now moves to Trash, items in Trash are kept out of every search and scan, deleting inside Trash is permanent, and the 30-day purge runs when a workspace opens. Trash still looked like an ordinary folder in the sidebar after this milestone.
+
+Milestone 3 (2026-10-17): Trash is shown last with a bin icon and a translated label, its record file is hidden, items in it can be restored (and are then selected in their original folder) or deleted for good, and Trash can be emptied. Milestone 4 (docs, manual check on a real display) remains.
 
 
 ## Context and Orientation
@@ -168,6 +173,21 @@ Milestone 2, real window (offscreen, scratch settings, `QMessageBox.question` pa
     inside-Trash dialog: Delete login.testlog? This cannot be undone.
     on disk: ['Trash/meetings/weekly.testlog', 'tdialog/checkout.testlog', 'top.testlog']
     after reopening with meetings trashed 31 days ago: ['tdialog/checkout.testlog', 'top.testlog'] | Trash contents: []
+
+Milestone 3, real window (offscreen, scratch settings, hidden files shown via `QDir.Hidden` to mimic Windows, menus scripted through a `QMenu` subclass):
+
+    top level (en): ['tdialog', 'zeta', 'top', 'Trash']
+    Trash icon is the bin: True
+    inside Trash (record file hidden): ['meetings', 'tdialog'] | on disk: ['.trashed.json', 'meetings', 'tdialog']
+    menu on Trash: ['Empty Trash']
+    menu on trashed note: ['Restore', 'Delete']
+    menu on normal note: ['Rename', 'Delete', 'Move To...', 'Status', 'Tags...', 'Pin to Top', 'Archive']
+    restored: True | text: # tdialog/login | selected: tdialog/login.testlog
+    rename dialog on Trash: False
+    top level (sv): ['tdialog', 'zeta', 'top', 'Papperskorg']
+    after Empty Trash: [] | tree: []
+
+Screenshots in Swedish, light and dark, show the bin icon and "Papperskorg" last in the tree.
 
 The note opened after deleting the open one is the next row in the tree, which can be in another folder (`top.testlog` here); that is the existing delete behaviour, unchanged.
 

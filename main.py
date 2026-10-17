@@ -39,6 +39,7 @@ from icons import (
     FOLDER_PINNED_ICON_SVG,
     TESTLOG_ICON_SVG,
     TESTLOG_PINNED_ICON_SVG,
+    TRASH_ICON_SVG,
     icon_from_svg,
     multi_icon_from_svg,
 )
@@ -75,7 +76,17 @@ from testlog_utils import (
     TESTLOG_STATUS_OPTIONS,
 )
 from translations import TRANSLATIONS
-from trash import TrashError, available_path, is_in_trash, move_to_trash, purge_trash, skip_trash_dirs, trash_dir
+from trash import (
+    TrashError,
+    available_path,
+    empty_trash,
+    is_in_trash,
+    move_to_trash,
+    purge_trash,
+    restore_from_trash,
+    skip_trash_dirs,
+    trash_dir,
+)
 from version import get_version_info
 from workspace_models import TESTLOG_STATUS_ROLE, TESTLOG_TAGS_ROLE, WorkspaceFileSystemModel, WorkspaceSortProxyModel
 
@@ -3136,6 +3147,9 @@ class MainWindow(QMainWindow):
         self.swedish_action.setText(self._tr("Swedish"))
         self.about_action.setText(self._tr("About TestLog Editor"))
         self.tags_edit.setPlaceholderText(self._tr("Tags"))
+        if hasattr(self, "fs_model"):
+            self.fs_model.trash_label = self._tr("Trash")
+            self.tree.viewport().update()
         self.english_action.setChecked(self.current_language == "en")
         self.swedish_action.setChecked(self.current_language == "sv")
 
@@ -3258,6 +3272,7 @@ class MainWindow(QMainWindow):
             testlog_pinned_icon=testlog_pinned_icon,
             file_icon=file_icon,
         )
+        self.fs_model.trash_icon = icon_from_svg(TRASH_ICON_SVG, size=20)
         self.fs_proxy_model = WorkspaceSortProxyModel(self.fs_model, self.pinned_paths, self)
         self.fs_model.setNameFilters(["*.testlog"])
         self.fs_model.setNameFilterDisables(True)  # Visar mappar, gråar ut andra filer
@@ -4022,6 +4037,22 @@ class MainWindow(QMainWindow):
 
         menu = QMenu(self)
 
+        if self._is_trash_root(path):
+            empty_action = menu.addAction(self._tr("Empty Trash"))
+            if menu.exec(self.tree.viewport().mapToGlobal(pos)) == empty_action:
+                self.empty_workspace_trash()
+            return
+
+        if self._is_trashed_item(path):
+            restore_action = menu.addAction(self._tr("Restore"))
+            delete_action = menu.addAction(self._tr("Delete"))
+            chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
+            if chosen == restore_action:
+                self.restore_item(path)
+            elif chosen == delete_action:
+                self.delete_item(path)
+            return
+
         rename_action = menu.addAction(self._tr("Rename"))
         delete_action = menu.addAction(self._tr("Delete"))
         move_action = menu.addAction(self._tr("Move To..."))
@@ -4145,7 +4176,55 @@ class MainWindow(QMainWindow):
         self._refresh_sidebar_sort()
         return True
 
+    def _is_trash_root(self, path):
+        return bool(self.workspace_dir) and os.path.normcase(os.path.abspath(path)) == os.path.normcase(trash_dir(self.workspace_dir))
+
+    def _is_trashed_item(self, path):
+        return bool(self.workspace_dir) and is_in_trash(self.workspace_dir, path) and not self._is_trash_root(path)
+
+    def restore_item(self, path):
+        try:
+            new_path = restore_from_trash(self.workspace_dir, path)
+        except (TrashError, OSError):
+            logger.exception("Could not restore %s from Trash", path)
+            QMessageBox.warning(
+                self,
+                self._tr("Restore"),
+                self._tr("Could not restore {name}.").format(name=os.path.basename(path)),
+            )
+            return
+        self._update_tracked_paths(path, new_path)
+        self.refresh_pinned()
+        # Unlike delete and archive, reveal the item: the user went to Trash to get it back.
+        self._select_file_in_tree(new_path, retry_attempts=6)
+        self._start_fulltext_indexing()
+
+    def empty_workspace_trash(self):
+        answer = QMessageBox.question(
+            self,
+            self._tr("Empty Trash"),
+            self._tr("Permanently delete everything in Trash? This cannot be undone."),
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        trash = trash_dir(self.workspace_dir)
+        was_open_in_trash = bool(self.current_file) and is_in_trash(self.workspace_dir, self.current_file)
+        try:
+            empty_trash(self.workspace_dir)
+        except OSError:
+            logger.exception("Could not empty Trash in %s", self.workspace_dir)
+            QMessageBox.warning(self, self._tr("Empty Trash"), self._tr("Could not empty Trash."))
+        self._remove_tracked_paths(trash)
+        self.refresh_pinned()
+        if was_open_in_trash and self.current_file is None:
+            self.editor.clear()
+            self.tree.clearSelection()
+            self.setWindowTitle(self._window_title())
+
     def rename_item(self, path):
+        if self._is_trash_root(path):
+            return
         current_name = Path(path).name if os.path.isdir(path) else Path(path).stem
         dialog = QInputDialog(self)
         dialog.setInputMode(QInputDialog.InputMode.TextInput)
@@ -4210,7 +4289,7 @@ class MainWindow(QMainWindow):
 
     def delete_item(self, path):
         # Outside Trash, Delete moves the item to Trash; inside it, Delete removes it for good.
-        if self.workspace_dir and os.path.normcase(os.path.abspath(path)) == os.path.normcase(trash_dir(self.workspace_dir)):
+        if self._is_trash_root(path):
             return
         permanent = not self.workspace_dir or is_in_trash(self.workspace_dir, path)
         deleted_index = self.fs_proxy_model.mapFromSource(self.fs_model.index(path))

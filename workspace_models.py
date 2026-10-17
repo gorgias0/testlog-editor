@@ -10,7 +10,7 @@ from testlog_utils import (
     normalize_testlog_tags,
     read_testlog_header_from_archive,
 )
-from trash import skip_trash_dirs
+from trash import TRASH_DIR_NAME, is_trash_record_file, skip_trash_dirs
 
 TESTLOG_STATUS_ROLE = Qt.ItemDataRole.UserRole + 20
 TESTLOG_TAGS_ROLE = Qt.ItemDataRole.UserRole + 21
@@ -54,6 +54,15 @@ class WorkspaceFileSystemModel(QFileSystemModel):
         self.testlog_pinned_icon = testlog_pinned_icon
         self.file_icon = file_icon
         self._header_cache = {}
+        # Trash has the same folder name on disk in every language; only its label is translated.
+        self.trash_label = TRASH_DIR_NAME
+        self.trash_icon = None
+
+    def is_trash_dir(self, path):
+        root = self.rootPath()
+        return bool(root) and os.path.normcase(os.path.normpath(path)) == os.path.normcase(
+            os.path.normpath(os.path.join(root, TRASH_DIR_NAME))
+        )
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.ToolTipRole:
@@ -65,6 +74,8 @@ class WorkspaceFileSystemModel(QFileSystemModel):
             path = self.filePath(index)
             is_pinned = path in self.pinned_paths
             if self.isDir(index):
+                if self.trash_icon is not None and self.is_trash_dir(path):
+                    return self.trash_icon
                 return self.folder_pinned_icon if is_pinned else self.folder_icon
             if path.endswith(".testlog"):
                 return self.testlog_pinned_icon if is_pinned else self.testlog_icon
@@ -74,6 +85,8 @@ class WorkspaceFileSystemModel(QFileSystemModel):
             path = self.filePath(index)
             if path.endswith(".testlog"):
                 return Path(path).stem
+            if self.isDir(index) and self.is_trash_dir(path):
+                return self.trash_label
 
         if role == TESTLOG_STATUS_ROLE and index.column() == 0:
             path = self.filePath(index)
@@ -175,8 +188,8 @@ class WorkspaceSortProxyModel(QSortFilterProxyModel):
         left_is_pinned_file = left_path in self.pinned_paths and not left_is_dir
         right_is_pinned_file = right_path in self.pinned_paths and not right_is_dir
 
-        left_rank = self._sort_rank(left_is_pinned_file, left_is_dir)
-        right_rank = self._sort_rank(right_is_pinned_file, right_is_dir)
+        left_rank = self._sort_rank(left_is_pinned_file, left_is_dir, left_is_dir and self._source_model.is_trash_dir(left_path))
+        right_rank = self._sort_rank(right_is_pinned_file, right_is_dir, right_is_dir and self._source_model.is_trash_dir(right_path))
         if left_rank != right_rank:
             return left_rank < right_rank
 
@@ -218,7 +231,10 @@ class WorkspaceSortProxyModel(QSortFilterProxyModel):
         self.invalidate()
 
     @staticmethod
-    def _sort_rank(is_pinned_file, is_dir):
+    def _sort_rank(is_pinned_file, is_dir, is_trash=False):
+        # Trash is always last, after every folder and note.
+        if is_trash:
+            return 3
         if is_dir:
             return 0
         if is_pinned_file:
@@ -266,6 +282,11 @@ class WorkspaceSortProxyModel(QSortFilterProxyModel):
     def filterAcceptsRow(self, source_row, source_parent):
         index = self._source_model.index(source_row, 0, source_parent)
         if not index.isValid():
+            return False
+
+        if is_trash_record_file(self._source_model.fileName(index)) and self._source_model.is_trash_dir(
+            os.path.dirname(self._source_model.filePath(index))
+        ):
             return False
 
         if not self.search_term and not self.search_tags:
