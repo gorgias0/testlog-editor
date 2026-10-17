@@ -46,9 +46,9 @@ from diff_window import DiffWindow
 from document_find_bar import DocumentFindBar
 from json_tools import format_json_best_effort
 from text_tool_dialog import TextToolDialog
+from testlog_archive import read_testlog_note_text, rewrite_testlog_status, write_testlog_archive
 from testlog_utils import (
     build_fulltext_search_results,
-    collect_referenced_image_filenames,
     DEFAULT_TESTLOG_STATUS,
     get_testlog_status,
     guess_markdown_from_plain_text,
@@ -1178,17 +1178,6 @@ class PreviewBareUrlLinkifier(HTMLParser):
 
     def result(self):
         return "".join(self.parts)
-
-
-def read_testlog_note_text(path):
-    try:
-        with zipfile.ZipFile(path, "r") as zf:
-            if "note.md" not in zf.namelist():
-                return None
-            with zf.open("note.md") as note_file:
-                return strip_testlog_front_matter(note_file.read().decode("utf-8"))
-    except Exception:
-        return None
 
 
 class FullTextIndexSignals(QObject):
@@ -3941,20 +3930,7 @@ class MainWindow(QMainWindow):
         self._refresh_sidebar_sort()
 
     def _write_status_to_testlog(self, path, status):
-        entries = []
-        note_content = ""
-        with zipfile.ZipFile(path, "r") as zf:
-            for info in zf.infolist():
-                if info.filename == "note.md":
-                    note_content = zf.read(info.filename).decode("utf-8")
-                    continue
-                entries.append((info, zf.read(info.filename)))
-
-        note_content = set_testlog_status(note_content, status)
-        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("note.md", note_content)
-            for info, content in entries:
-                zf.writestr(info, content)
+        rewrite_testlog_status(path, status)
 
     def rename_item(self, path):
         current_name = Path(path).name if os.path.isdir(path) else Path(path).stem
@@ -4504,20 +4480,7 @@ class MainWindow(QMainWindow):
 
     def _write_testlog(self, path):
         note_content = set_testlog_status(self.editor.toPlainText(), self.current_status)
-        note_path = os.path.join(self.session_dir, "note.md")
-        with open(note_path, "w", encoding="utf-8") as f:
-            f.write(note_content)
-
-        # Find all image filenames referenced in the note
-        referenced = collect_referenced_image_filenames(note_content)
-
-        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.write(note_path, "note.md")
-            if os.path.exists(self.images_dir):
-                for img in os.listdir(self.images_dir):
-                    if img in referenced:
-                        img_path = os.path.join(self.images_dir, img)
-                        zf.write(img_path, f"images/{img}")
+        write_testlog_archive(path, note_content, self.images_dir)
         self.editor.document().setModified(False)
         self.autosave_timer.stop()
         self._update_fulltext_index_for_file(path)

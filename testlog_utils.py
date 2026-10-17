@@ -24,7 +24,13 @@ STATUS_KEY_PATTERN = re.compile(r"^status\s*:\s*(.*?)\s*$", re.IGNORECASE)
 
 
 def collect_referenced_image_filenames(note_content):
-    return set(IMAGE_REFERENCE_PATTERN.findall(note_content))
+    # Inserted image links are URL-encoded ("my%20shot.png"); keep the raw form too
+    # so a file whose real name contains "%" still matches.
+    referenced = set()
+    for name in IMAGE_REFERENCE_PATTERN.findall(note_content):
+        referenced.add(name)
+        referenced.add(unquote(name))
+    return referenced
 
 
 def normalize_testlog_status(status):
