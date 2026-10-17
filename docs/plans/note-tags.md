@@ -21,7 +21,9 @@ Sorting the tree by tag was discussed and deliberately left out of this plan (se
 - [x] (2026-10-17) Milestone 2: `TESTLOG_TAGS_ROLE`, header cache (`_header_for_path`, `tags_for_path`), tags in the tooltip, `parse_sidebar_search` and `sidebar_search_matches` in `workspace_models.py`; tags drawn in `WorkspaceTreeItemDelegate`; folder matching now decided from the files on disk and the tree re-expanded on `directoryLoaded` (see `Surprises & Discoveries`). `tests/test_workspace_search.py` (11 tests); 108 passed. Scripted real-window run and screenshots (see `Artifacts and Notes`).
 - [x] (2026-10-17) Milestone 2 committed as `ae0958b`.
 - [x] (2026-10-17) Milestone 3: `TagLineEdit` and `TagCompleter` in `main.py`; toolbar tag field with suggestions from `_known_workspace_tags` (Archive skipped); `_on_tags_edit_finished`, `_sync_tags_from_editor`; right-click "Tags..." with `edit_file_tags` / `set_file_tags` (plus a small `_is_open_file` helper); 3 Swedish strings. No new unit tests (Qt-dialog driven); scripted real-window run and toolbar screenshots (see `Artifacts and Notes`). 108 passed.
-- [ ] Milestone 4: `README.md` and `AGENTS.md` updated; full test run; manual check on a real display; retrospective written.
+- [x] (2026-10-17) Milestone 3 committed as `e8f2791`.
+- [x] (2026-10-17) Milestone 4: `README.md` (Highlights) and `AGENTS.md` (new "Note Header" section) updated; full test run 108 passed; retrospective written.
+- [ ] Manual check on a real display (Windows build): the `Validation and Acceptance` scenarios, especially completion popup behaviour and the sidebar at the user's real width.
 
 
 ## Surprises & Discoveries
@@ -60,7 +62,9 @@ Sorting the tree by tag was discussed and deliberately left out of this plan (se
 
 ## Outcomes & Retrospective
 
-Milestone 1 (2026-10-17): tags can be read from and written to the note header and to closed `.testlog` files, case-insensitively, without disturbing `status:`, the body or images. Nothing in the UI uses them yet. Milestone 2 (2026-10-17): tags show in the sidebar and tooltip, and `#tag` search works across collapsed folders; plain-text search also gained that. Milestone 3 (2026-10-17): tags can be edited from the toolbar field, with suggestions for the tag being typed, from the note header itself, and from the right-click menu for notes that are not open. Milestone 4 (docs, manual check on a real display) remains.
+Milestone 1 (2026-10-17): tags can be read from and written to the note header and to closed `.testlog` files, case-insensitively, without disturbing `status:`, the body or images. Nothing in the UI uses them yet. Milestone 2 (2026-10-17): tags show in the sidebar and tooltip, and `#tag` search works across collapsed folders; plain-text search also gained that. Milestone 3 (2026-10-17): tags can be edited from the toolbar field, with suggestions for the tag being typed, from the note header itself, and from the right-click menu for notes that are not open.
+
+Overall (2026-10-17): notes can carry case-insensitive tags in their header, set from the toolbar (with suggestions), the right-click menu or the header itself; the sidebar shows them where there is room and in the tooltip, and `#tag` in the sidebar search finds tagged notes in any folder, collapsed or not. The suite grew from 77 to 108 tests. Two things went beyond the original plan and are recorded in the `Decision Log`: the fix for search ignoring collapsed folders (it affected plain-text search too), and giving note names priority over tags in narrow sidebars. Not done: sorting by tag (out of scope by choice), and a check on a real display; every run here was offscreen in WSL. Lesson: screenshots of the real widgets caught the tag-width problem that no unit test would have.
 
 
 ## Context and Orientation
@@ -219,3 +223,5 @@ In `main.py`: `TagCompleter(QCompleter)`, and on `MainWindow`: `tags_edit`, `_on
 
 
 Revision note (2026-10-17): first version, written after reading `testlog_utils.py`, `testlog_archive.py`, `workspace_models.py` and the sidebar, toolbar and context-menu code in `main.py` at commit `451b055`.
+
+Revision note (2026-10-17): implementation complete for Milestones 1-4; living sections updated as each milestone landed.

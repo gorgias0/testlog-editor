@@ -91,6 +91,11 @@ There is now a small unit test suite for extracted helper logic, but UI behavior
 4. Verify Markdown preview updates correctly.
 5. Smoke test editor helpers you touched, such as Enter, Tab, Shift+Tab, bold/italic, and pasted images.
 
+## Note Header
+
+- `note.md` starts with a front-matter block (`---` lines) holding `status:` and, optionally, `tags:` (lowercase, comma-separated single words). Helpers live in `testlog_utils.py` (`get/set_testlog_status`, `get/set_testlog_tags`); each setter keeps header lines it does not own, so add new keys the same way.
+- The sidebar reads both through `WorkspaceFileSystemModel` (`TESTLOG_STATUS_ROLE`, `TESTLOG_TAGS_ROLE`, cached per file modification time). Sidebar search terms starting with `#` filter by tag; folder matches are decided from the files on disk because `QFileSystemModel` loads folders lazily.
+
 ## File And State Side Effects
 
 - App state is written through `QSettings`.
