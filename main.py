@@ -1181,12 +1181,16 @@ class PreviewBridge(QObject):
         self._checkbox_toggle_handler(index, checked)
 
 
+WINDOWS_DRIVE_PATH_PATTERN = re.compile(r"^[A-Za-z]:(?:/|\\|%5[Cc])")
+
+
 class PreviewBareUrlLinkifier(HTMLParser):
     URL_PATTERN = re.compile(r"(?P<url>(?:https?|ftp)://[^\s<>()]+|mailto:[^\s<>()]+)")
     SKIP_TAGS = {"a", "code", "pre", "script", "style"}
 
     def __init__(self):
-        super().__init__(convert_charrefs=False)
+        # Decoded text arrives in one piece, so "&amp;" no longer splits a URL; it is re-escaped below.
+        super().__init__(convert_charrefs=True)
         self.parts = []
         self._skip_depth = 0
 
@@ -1207,13 +1211,12 @@ class PreviewBareUrlLinkifier(HTMLParser):
         if self._skip_depth:
             self.parts.append(html_escape(data))
             return
-        self.parts.append(self.URL_PATTERN.sub(self._link_replacement, data))
-
-    def handle_entityref(self, name):
-        self.parts.append(f"&{name};")
-
-    def handle_charref(self, name):
-        self.parts.append(f"&#{name};")
+        position = 0
+        for match in self.URL_PATTERN.finditer(data):
+            self.parts.append(html_escape(data[position:match.start()]))
+            self.parts.append(self._link_replacement(match))
+            position = match.end()
+        self.parts.append(html_escape(data[position:]))
 
     def handle_comment(self, data):
         self.parts.append(f"<!--{data}-->")
@@ -2317,6 +2320,12 @@ class MainWindow(QMainWindow):
         """
 
     def _sanitize_preview_url(self, value, attribute_name):
+        # Network paths (//host/x or \\host\x) would make Windows contact a share and send the user's login.
+        if value.startswith(("//", "\\\\")) or value.lower().startswith("%5c%5c"):
+            return ""
+        # C:\x.png (rendered as C:%5Cx.png) and C:/x.png would otherwise be read as a "c:" URL scheme.
+        if WINDOWS_DRIVE_PATH_PATTERN.match(value):
+            return "file:///" + url_quote(url_unquote(value).replace("\\", "/"), safe="/:")
         parsed = urlparse(value)
         scheme = parsed.scheme.lower()
         if not scheme:
@@ -2342,23 +2351,29 @@ class MainWindow(QMainWindow):
             html,
             flags=re.IGNORECASE,
         )
-        html = re.sub(
+        # Rewrite attributes inside tags only. Raw HTML is disabled, so every tag here comes from
+        # the renderer; running these patterns over the whole page also cut ordinary text such as
+        # "one = 1" or "href='x'".
+        return re.sub(r"<[A-Za-z][^>]*>", self._sanitize_preview_tag, html)
+
+    def _sanitize_preview_tag(self, match):
+        tag = re.sub(
             r"\s+on[a-z0-9_-]+\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)",
             "",
-            html,
+            match.group(0),
             flags=re.IGNORECASE,
         )
 
-        def replace_url_attr(match):
-            attribute_name = match.group("attr").lower()
-            quote = match.group("quote")
-            safe_value = self._sanitize_preview_url(match.group("value"), attribute_name)
+        def replace_url_attr(attr_match):
+            attribute_name = attr_match.group("attr").lower()
+            quote = attr_match.group("quote")
+            safe_value = self._sanitize_preview_url(attr_match.group("value"), attribute_name)
             return f' {attribute_name}={quote}{safe_value}{quote}'
 
         return re.sub(
             r"\s(?P<attr>href|src)\s*=\s*(?P<quote>[\"'])(?P<value>.*?)(?P=quote)",
             replace_url_attr,
-            html,
+            tag,
             flags=re.IGNORECASE | re.DOTALL,
         )
 
@@ -4716,35 +4731,36 @@ class MainWindow(QMainWindow):
         self._apply_preview_content()
 
     def toggle_checkbox_from_preview(self, index, checked):
+        checkbox_lines = getattr(self, "_preview_checkbox_lines", [])
+        if not 0 <= index < len(checkbox_lines):
+            return
         text = self.editor.toPlainText()
         lines = text.split("\n")
-        checkbox_pattern = re.compile(r'^(\s*(?:[-+*]|\d+[.)])\s+\[)( |x|X)(\].*)$')
+        line_index = checkbox_lines[index]
+        # Allows blockquote markers ("> - [ ] item"); if the line no longer is a task item the
+        # preview is stale, so leave the text alone and let the next render catch up.
+        checkbox_pattern = re.compile(r'^(\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+\[)( |x|X)(\].*)$')
+        match = checkbox_pattern.match(lines[line_index]) if line_index < len(lines) else None
+        if not match:
+            self.update_preview()
+            return
+
         editor_view_state = self.editor._capture_view_state()
         cursor = self.editor.textCursor()
         cursor_position = cursor.position()
         anchor_position = cursor.anchor()
         self._pending_preview_scroll_ratio = self._scroll_ratio(self.editor.verticalScrollBar())
 
-        checkbox_count = 0
-        for line_index, line in enumerate(lines):
-            match = checkbox_pattern.match(line)
-            if not match:
-                continue
-
-            if checkbox_count == index:
-                marker = "x" if checked else " "
-                lines[line_index] = f"{match.group(1)}{marker}{match.group(3)}"
-                cursor.beginEditBlock()
-                cursor.select(QTextCursor.SelectionType.Document)
-                cursor.insertText("\n".join(lines))
-                cursor.setPosition(anchor_position)
-                cursor.setPosition(cursor_position, QTextCursor.MoveMode.KeepAnchor)
-                cursor.endEditBlock()
-                self.editor.setTextCursor(cursor)
-                self.editor._restore_view_state(editor_view_state)
-                return
-
-            checkbox_count += 1
+        marker = "x" if checked else " "
+        lines[line_index] = f"{match.group(1)}{marker}{match.group(3)}"
+        cursor.beginEditBlock()
+        cursor.select(QTextCursor.SelectionType.Document)
+        cursor.insertText("\n".join(lines))
+        cursor.setPosition(anchor_position)
+        cursor.setPosition(cursor_position, QTextCursor.MoveMode.KeepAnchor)
+        cursor.endEditBlock()
+        self.editor.setTextCursor(cursor)
+        self.editor._restore_view_state(editor_view_state)
 
     def _update_editor_counts(self):
         text = self.editor.toPlainText()
@@ -5047,8 +5063,18 @@ class MainWindow(QMainWindow):
         return resolve_preview_image_path(src, self.session_dir)
 
     def _build_preview_body_html(self, interactive=False, theme_mode=None):
-        md = strip_testlog_front_matter(self.editor.toPlainText())
-        rendered = self.md_parser.render(md)
+        text = self.editor.toPlainText()
+        md = strip_testlog_front_matter(text)
+        tokens = self.md_parser.parse(md)
+        # The preview's checkboxes appear in the same order as task-list items in the token stream;
+        # remember each one's source line so a click edits exactly that line, whatever is around it.
+        header_lines = text.count("\n") - md.count("\n")
+        self._preview_checkbox_lines = [
+            token.map[0] + header_lines
+            for token in tokens
+            if token.type == "list_item_open" and token.map and "task-list-item" in (token.attrGet("class") or "")
+        ]
+        rendered = self.md_parser.renderer.render(tokens, self.md_parser.options, {})
         rendered = self._linkify_preview_bare_urls(rendered)
         rendered = self._style_headings(rendered, theme_mode=theme_mode)
         rendered = self._style_code_blocks(rendered, interactive=interactive)
