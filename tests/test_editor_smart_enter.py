@@ -294,3 +294,119 @@ def test_tab_on_line_starting_with_decimal_or_date_only_indents():
         editor._handle_tab()
 
         assert editor.toPlainText() == f"  {text}"
+
+
+def _set_cursor(editor, python_index):
+    from main import utf16_length
+
+    cursor = editor.textCursor()
+    cursor.setPosition(utf16_length(editor.toPlainText()[:python_index]))
+    editor.setTextCursor(cursor)
+
+
+def _type_backticks(editor, count=3):
+    for _ in range(count):
+        editor._handle_backtick()
+
+
+def test_smart_enter_replaces_selection_on_list_line():
+    editor = _editor_with_cursor_at_end("- abc")
+    _select_text(editor, "b")
+
+    _press_smart_enter(editor)
+
+    assert editor.toPlainText() == "- a\n- c"
+
+
+def test_smart_enter_replaces_selection_across_list_lines():
+    editor = _editor_with_cursor_at_end("- abc\n- def")
+    _select_text(editor, "c\n- d")
+
+    _press_smart_enter(editor)
+
+    assert editor.toPlainText() == "- ab\n- ef"
+
+
+def test_smart_enter_splits_correctly_after_emoji():
+    editor = _editor_with_cursor_at_end("- 😀ab")
+    _set_cursor(editor, len("- 😀a"))
+
+    _press_smart_enter(editor)
+
+    assert editor.toPlainText() == "- 😀a\n- b"
+
+
+def test_smart_enter_on_whitespace_only_line_keeps_the_line():
+    editor = _editor_with_cursor_at_end("abc\n    ")
+
+    _press_smart_enter(editor)
+
+    assert editor.toPlainText() == "abc\n\n"
+
+
+def test_link_lookup_after_emoji_does_not_return_next_line_link():
+    editor = _editor_with_cursor_at_end("😀" * 20 + " x\n[l](http://z)")
+    from main import utf16_length
+
+    position = utf16_length("😀" * 20 + " ")
+
+    assert editor._link_at_position(position) is None
+    assert editor._link_at_position(utf16_length("😀" * 20 + " x\n[l](h")) == "http://z"
+
+
+def test_typing_closing_fence_closes_the_code_block():
+    editor = _editor_with_cursor_at_end("```\ncode\n")
+
+    _type_backticks(editor)
+
+    assert editor.toPlainText() == "```\ncode\n```"
+
+
+def test_new_code_block_takes_language_and_enter_moves_into_body():
+    editor = _editor_with_cursor_at_end("")
+
+    _type_backticks(editor)
+    editor.insertPlainText("py")
+    _press_smart_enter(editor)
+    editor.insertPlainText("x")
+
+    assert editor.toPlainText() == "```py\nx\n```"
+
+
+def test_code_block_auto_expands_after_emoji():
+    editor = _editor_with_cursor_at_end("😀 ")
+
+    _type_backticks(editor)
+
+    assert editor.toPlainText() == "😀 ```\n\n```"
+
+
+def test_highlighter_closes_fence_only_on_matching_fence():
+    from PySide6.QtGui import QTextDocument
+
+    from main import MarkdownHighlighter
+
+    _app()
+    document = QTextDocument()
+    document.setPlainText("````md\n```\n# not heading\n````\n# heading\n~~~\n```\n~~~\nend")
+    MarkdownHighlighter(document).rehighlight()
+
+    in_code = [document.findBlockByNumber(i).userState() >= 1 for i in range(document.blockCount())]
+    assert in_code == [True, True, True, False, False, True, True, False, False]
+
+
+def test_highlighter_stays_fast_on_long_lines_with_unmatched_markers():
+    import time
+
+    from PySide6.QtGui import QTextDocument
+
+    from main import MarkdownHighlighter
+
+    _app()
+    document = QTextDocument()
+    highlighter = MarkdownHighlighter(document)
+    started = time.perf_counter()
+    document.setPlainText("**a " * 10000 + "\n" + "*a " * 14000)
+    highlighter.rehighlight()
+
+    assert time.perf_counter() - started < 1.5

@@ -381,7 +381,7 @@ class Editor(QTextEdit):
         if not text:
             return None
 
-        lookup_position = max(0, min(position, len(text) - 1))
+        lookup_position = max(0, min(python_index_from_utf16(text, position), len(text) - 1))
         for pattern, url_group in (
             (r"!?\[[^\]\n]*\]\(([^)\s]+)(?:\s+['\"][^'\"]*['\"])?\)", 1),
             (r"<((?:https?|ftp)://[^>\s]+|mailto:[^>\s]+)>", 1),
@@ -394,18 +394,35 @@ class Editor(QTextEdit):
 
     def _handle_smart_enter(self):
         cursor = self.textCursor()
+        if not cursor.hasSelection():
+            self._smart_enter_at_cursor()
+            return
+        # Enter replaces the selection, like a normal Enter, in one undo step.
+        cursor.beginEditBlock()
+        cursor.removeSelectedText()
+        self.setTextCursor(cursor)
+        self._smart_enter_at_cursor()
+        cursor.endEditBlock()
+
+    def _smart_enter_at_cursor(self):
+        cursor = self.textCursor()
         block = cursor.block()
         line_text = block.text()
         doc = self.document()
         is_last_line = block.blockNumber() == doc.blockCount() - 1
-        position_in_block = cursor.positionInBlock()
+        position_in_block = python_index_from_utf16(line_text, cursor.positionInBlock())
         indent = self._get_leading_whitespace(line_text)
 
         if indent and not line_text.strip():
-            cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-            cursor.insertText("")
+            # Clear the whitespace and start a new line; selecting the whole block also took
+            # the line break before it and removed the line.
+            cursor.movePosition(cursor.MoveOperation.StartOfBlock)
+            cursor.movePosition(cursor.MoveOperation.EndOfBlock, cursor.MoveMode.KeepAnchor)
             cursor.insertText("\n")
             self._set_text_cursor_visible(cursor)
+            return
+
+        if self._move_into_new_code_block(cursor, line_text, position_in_block):
             return
 
         list_text = line_text[len(indent):]
@@ -502,7 +519,7 @@ class Editor(QTextEdit):
         cursor.movePosition(cursor.MoveOperation.EndOfLine, cursor.MoveMode.KeepAnchor)
         cursor.removeSelectedText()
         cursor.insertText(f"{current_prefix}{before_content}\n{next_prefix}{after_content}")
-        cursor.setPosition(cursor.position() - len(after_content))
+        cursor.setPosition(cursor.position() - utf16_length(after_content))
         self._set_text_cursor_visible(cursor)
         cursor.endEditBlock()
 
@@ -732,27 +749,59 @@ class Editor(QTextEdit):
 
     def _check_for_triple_backtick(self):
         cursor = self.textCursor()
-        pos = cursor.positionInBlock()
         block = cursor.block()
         line_text = block.text()
-        
+        pos = python_index_from_utf16(line_text, cursor.positionInBlock())
+
         # Get the three characters before cursor
         if pos >= 3:
             before_text = line_text[max(0, pos - 3):pos]
             if before_text == '```':
                 # Check if preceded by whitespace or at start of line
-                if pos == 3 or line_text[pos - 4].isspace():
+                if (pos == 3 or line_text[pos - 4].isspace()) and not self._inside_code_fence(block):
                     # Delete the three backticks
                     cursor.movePosition(cursor.MoveOperation.Left, cursor.MoveMode.MoveAnchor, 3)
                     cursor.movePosition(cursor.MoveOperation.Right, cursor.MoveMode.KeepAnchor, 3)
                     cursor.removeSelectedText()
                     self.setTextCursor(cursor)
-                    
-                    # Insert code block
+
+                    # Insert the code block and stay on the opening fence, so a language name
+                    # ("```py") can follow; Enter then moves into the empty body line.
                     cursor.insertText('```\n\n```')
+                    cursor.movePosition(cursor.MoveOperation.Up)
                     cursor.movePosition(cursor.MoveOperation.Up)
                     cursor.movePosition(cursor.MoveOperation.EndOfLine)
                     self.setTextCursor(cursor)
+
+    def _inside_code_fence(self, block):
+        # True when an unclosed ``` or ~~~ fence is above this line; typing ``` there closes it.
+        opening = None
+        previous = self.document().firstBlock()
+        while previous.isValid() and previous != block:
+            fence = re.match(r"^\s*(`{3,}|~{3,})(.*)$", previous.text())
+            if fence:
+                marker = fence.group(1)
+                if opening is None:
+                    opening = marker
+                elif marker[0] == opening[0] and len(marker) >= len(opening) and not fence.group(2).strip():
+                    opening = None
+            previous = previous.next()
+        return opening is not None
+
+    def _move_into_new_code_block(self, cursor, line_text, position_in_block):
+        # On the opening fence of an empty code block ("```py", empty line, "```"), Enter moves
+        # into the body instead of adding another line.
+        if position_in_block != len(line_text) or not re.match(r"^\s*(`{3,}|~{3,})[^`]*$", line_text):
+            return False
+        body = cursor.block().next()
+        closing = body.next()
+        if not (body.isValid() and closing.isValid() and not body.text().strip()):
+            return False
+        if not re.match(r"^\s*(`{3,}|~{3,})\s*$", closing.text()) or self._inside_code_fence(cursor.block()):
+            return False
+        cursor.setPosition(body.position() + utf16_length(body.text()))
+        self._set_text_cursor_visible(cursor)
+        return True
 
     def format_code_block(self):
         cursor = self.textCursor()
@@ -1069,23 +1118,36 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 if end > start:
                     self.setFormat(start, end - start, text_format)
 
+    @classmethod
+    def _fence_state(cls, marker):
+        # Inside a code block the state also records the opening fence ("````" or "~~~"), because
+        # only a fence of the same character and at least the same length closes it.
+        return cls.CODE_BLOCK_STATE + 2 * len(marker) + (1 if marker[0] == "~" else 0)
+
     def highlightBlock(self, text):
         self.setCurrentBlockState(0)
         previous_state = self.previousBlockState()
         fence_match = re.match(r"^(\s*)(`{3,}|~{3,})(.*)$", text)
 
-        if previous_state == self.CODE_BLOCK_STATE:
+        if previous_state >= self.CODE_BLOCK_STATE:
             self.setFormat(0, len(text), self.code_block_format)
-            if fence_match:
+            opening_length, opening_tilde = divmod(previous_state - self.CODE_BLOCK_STATE, 2)
+            closes = (
+                fence_match
+                and (fence_match.group(2)[0] == "~") == bool(opening_tilde)
+                and len(fence_match.group(2)) >= opening_length
+                and not fence_match.group(3).strip()
+            )
+            if closes:
                 self.setFormat(0, len(text), self.code_fence_format)
                 self.setCurrentBlockState(0)
             else:
-                self.setCurrentBlockState(self.CODE_BLOCK_STATE)
+                self.setCurrentBlockState(previous_state)
             return
 
         if fence_match:
             self.setFormat(0, len(text), self.code_fence_format)
-            self.setCurrentBlockState(self.CODE_BLOCK_STATE)
+            self.setCurrentBlockState(self._fence_state(fence_match.group(2)))
             return
 
         heading_match = re.match(r"^(#{1,6})(\s+)(.*)$", text)
@@ -1120,12 +1182,12 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             (2, self.inline_code_format),
             (3, self.emphasis_marker_format),
         ])
-        self._apply_match_format(text, r"(\*\*|__)(?=\S)(.+?[*_]*)(?<=\S)\1", [
+        self._apply_match_format(text, r"(\*\*|__)(?=\S)((?:(?!\1).)+?[*_]*)(?<=\S)\1", [
             (1, self.emphasis_marker_format),
             (2, self.bold_text_format),
             (0, self.bold_text_format),
         ])
-        self._apply_match_format(text, r"(?<!\*)\*(?!\*)(?=\S)(.+?)(?<=\S)\*(?!\*)|(?<!_)_(?!_)(?=\S)(.+?)(?<=\S)_(?!_)", [
+        self._apply_match_format(text, r"(?<!\*)\*(?!\*)(?=\S)([^*]+?)(?<=\S)\*(?!\*)|(?<!_)_(?!_)(?=\S)([^_]+?)(?<=\S)_(?!_)", [
             (1, self.italic_text_format),
             (2, self.italic_text_format),
         ])
@@ -1179,6 +1241,25 @@ class PreviewBridge(QObject):
     @Slot(int, bool)
     def toggleCheckbox(self, index, checked):
         self._checkbox_toggle_handler(index, checked)
+
+
+ASTRAL_CHARACTER_PATTERN = re.compile("[\U00010000-\U0010FFFF]")
+
+
+def utf16_length(text):
+    return len(text.encode("utf-16-le")) // 2
+
+
+def python_index_from_utf16(text, offset):
+    # Qt positions count UTF-16 code units; an emoji outside the BMP is two units but one Python character.
+    if not ASTRAL_CHARACTER_PATTERN.search(text):
+        return max(0, min(offset, len(text)))
+    units = 0
+    for index, character in enumerate(text):
+        if units >= offset:
+            return index
+        units += 2 if ord(character) > 0xFFFF else 1
+    return len(text)
 
 
 WINDOWS_DRIVE_PATH_PATTERN = re.compile(r"^[A-Za-z]:(?:/|\\|%5[Cc])")
