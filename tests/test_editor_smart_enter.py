@@ -233,3 +233,64 @@ def test_insert_current_time_uses_hours_and_minutes():
     # Allow the minute to roll over between reading the clock and inserting.
     after = QTime.currentTime()
     assert inserted in {before.toString("HH:mm"), after.toString("HH:mm")}
+
+
+def test_move_last_line_up_keeps_lines_separate():
+    editor = _editor_with_cursor_at_end("a\nb\nc")
+
+    editor.move_lines_up()
+
+    assert editor.toPlainText() == "a\nc\nb"
+
+
+def test_move_last_ordered_item_up_renumbers_without_joining():
+    editor = _editor_with_cursor_at_end("1. a\n2. b")
+
+    editor.move_lines_up()
+
+    assert editor.toPlainText() == "1. b\n2. a"
+
+
+def test_move_lines_leaves_numbers_elsewhere_alone():
+    editor = _editor_with_cursor_at_end("x\n3.14 roughly\n2026.10.17 release\n\n- y\n- z")
+
+    editor.move_lines_up()
+
+    assert editor.toPlainText() == "x\n3.14 roughly\n2026.10.17 release\n\n- z\n- y"
+
+
+def test_move_lines_only_renumbers_the_touched_list():
+    editor = _editor_with_cursor_at_end("1. a\n2. b\n\ntext\n\n7. other\n9. odd")
+    _select_text(editor, "2. b")
+
+    editor.move_lines_up()
+
+    assert editor.toPlainText() == "1. b\n2. a\n\ntext\n\n7. other\n9. odd"
+
+
+def test_move_lines_keeps_list_start_number_and_spacing():
+    editor = _editor_with_cursor_at_end("5. five\n6.  six")
+
+    editor.move_lines_up()
+
+    assert editor.toPlainText() == "5.  six\n6. five"
+
+
+def test_move_lines_does_not_renumber_inside_code_fence():
+    editor = _editor_with_cursor_at_end("```\n2. code\n```\n1. a\n2. b")
+
+    editor.move_lines_up()
+
+    assert editor.toPlainText() == "```\n2. code\n```\n1. b\n2. a"
+
+
+def test_tab_on_line_starting_with_decimal_or_date_only_indents():
+    for text in ("3.14 is pi", "2026.10.17 release"):
+        editor = _editor_with_cursor_at_end(text)
+        cursor = editor.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        editor.setTextCursor(cursor)
+
+        editor._handle_tab()
+
+        assert editor.toPlainText() == f"  {text}"

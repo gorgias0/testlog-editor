@@ -564,7 +564,8 @@ class Editor(QTextEdit):
         return bool(re.match(r'^\s*[-+*]\s+', line_text) or self._ordered_list_match(line_text))
 
     def _ordered_list_match(self, line_text):
-        return re.match(r'^(\s*)(\d+)(\.)(\s*)', line_text)
+        # "1." and "1.item" are list markers, but "3.14" and "2026.10.17" are not.
+        return re.match(r'^(\s*)(\d+)(\.)(?!\d)(\s*)', line_text)
 
     def _unindent_char_count(self, line_text):
         if not line_text:
@@ -882,6 +883,10 @@ class Editor(QTextEdit):
             replace_end = end_pos
             moved_text = full_text[start_pos:end_pos]
             adjacent_text = full_text[replace_start:start_pos]
+            # Moving the last line up: it has no line break of its own, so take the one from above.
+            if moved_text and not moved_text.endswith("\n") and adjacent_text.endswith("\n"):
+                moved_text += "\n"
+                adjacent_text = adjacent_text[:-1]
             replacement_text = moved_text + adjacent_text
             selection_start = replace_start
             selection_end = replace_start + len(moved_text)
@@ -909,7 +914,7 @@ class Editor(QTextEdit):
         cursor.setPosition(replace_end, cursor.MoveMode.KeepAnchor)
         cursor.removeSelectedText()
         cursor.insertText(replacement_text)
-        self._renumber_ordered_lists()
+        self._renumber_ordered_lists(replace_start, replace_start + len(replacement_text))
 
         new_cursor = self.textCursor()
         moved_length = len(moved_text)
@@ -925,53 +930,71 @@ class Editor(QTextEdit):
         cursor.endEditBlock()
         self._restore_view_state(view_state)
 
-    def _renumber_ordered_lists(self):
+    def _renumber_ordered_lists(self, changed_start=None, changed_end=None):
+        # Renumber only the ordered lists next to the changed text. Numbered lines elsewhere,
+        # inside code fences, and the spacing after each number are left alone, and each list
+        # level keeps its lowest number as its start (so a list starting at 5 stays at 5).
         doc = self.document()
+        runs = []
+        current_run = []
+        in_fence = False
         block = doc.firstBlock()
-        ordered_levels = []
-        cursor = QTextCursor(doc)
-
         while block.isValid():
-            ordered_match = self._ordered_list_match(block.text())
-            if not ordered_match:
-                ordered_levels.clear()
-                block = block.next()
-                continue
-
-            indent = ordered_match.group(1)
-
-            while ordered_levels and len(ordered_levels[-1][0]) > len(indent):
-                ordered_levels.pop()
-
-            while ordered_levels and ordered_levels[-1][0] != indent and len(ordered_levels[-1][0]) >= len(indent):
-                ordered_levels.pop()
-
-            if ordered_levels and ordered_levels[-1][0] == indent:
-                next_number = ordered_levels[-1][1] + 1
-                ordered_levels[-1] = (indent, next_number)
-            else:
-                next_number = 1
-                ordered_levels.append((indent, next_number))
-
-            marker_length = (
-                len(ordered_match.group(2))
-                + len(ordered_match.group(3))
-                + len(ordered_match.group(4))
-            )
-            replacement_marker = f"{next_number}. "
-            existing_marker = block.text()[
-                len(indent):len(indent) + marker_length
-            ]
-            if existing_marker != replacement_marker:
-                number_start = block.position() + len(indent)
-                cursor.setPosition(number_start)
-                cursor.setPosition(
-                    number_start + marker_length,
-                    QTextCursor.MoveMode.KeepAnchor,
-                )
-                cursor.insertText(replacement_marker)
-
+            text = block.text()
+            ordered_match = None
+            if re.match(r'^\s*(```|~~~)', text):
+                in_fence = not in_fence
+            elif not in_fence:
+                ordered_match = self._ordered_list_match(text)
+            if ordered_match:
+                current_run.append((block, ordered_match))
+            elif current_run:
+                runs.append(current_run)
+                current_run = []
             block = block.next()
+        if current_run:
+            runs.append(current_run)
+
+        if changed_start is not None:
+            first_block = doc.findBlock(changed_start)
+            last_block = doc.findBlock(max(changed_start, changed_end - 1))
+            if first_block.previous().isValid():
+                first_block = first_block.previous()
+            if last_block.next().isValid():
+                last_block = last_block.next()
+            first_number, last_number = first_block.blockNumber(), last_block.blockNumber()
+            runs = [
+                run for run in runs
+                if run[0][0].blockNumber() <= last_number and run[-1][0].blockNumber() >= first_number
+            ]
+
+        cursor = QTextCursor(doc)
+        for run in runs:
+            groups = []
+            levels = []
+            items = []
+            for block, ordered_match in run:
+                indent = ordered_match.group(1)
+                while levels and len(levels[-1][0]) > len(indent):
+                    levels.pop()
+                while levels and levels[-1][0] != indent and len(levels[-1][0]) >= len(indent):
+                    levels.pop()
+                if not (levels and levels[-1][0] == indent):
+                    groups.append([])
+                    levels.append((indent, len(groups) - 1))
+                group_index = levels[-1][1]
+                groups[group_index].append(int(ordered_match.group(2)))
+                items.append((block, ordered_match, group_index, len(groups[group_index]) - 1))
+
+            starts = [min(numbers) for numbers in groups]
+            for block, ordered_match, group_index, offset in items:
+                number = str(starts[group_index] + offset)
+                if number == ordered_match.group(2):
+                    continue
+                number_start = block.position() + len(ordered_match.group(1))
+                cursor.setPosition(number_start)
+                cursor.setPosition(number_start + len(ordered_match.group(2)), QTextCursor.MoveMode.KeepAnchor)
+                cursor.insertText(number)
 
 
 class MarkdownHighlighter(QSyntaxHighlighter):
