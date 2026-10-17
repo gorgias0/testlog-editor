@@ -23,8 +23,10 @@ How to see it working: run `python -m pytest` and see new tests for each of the 
 - [x] (2026-10-17) Milestone 2 committed as `898a5c6`.
 - [x] (2026-10-17) Milestone 3: `TestlogArchiveError` and `extract_testlog_archive` in `testlog_archive.py`; `MainWindow._new_session(session_dir=None)`; `open_testlog` extracts first, warns and returns `False` on failure, returns `True` on success; the now-unused `import zipfile` removed from `main.py`; Swedish string added. 4 tests added; 65 passed. Real-window scenario run before and after (see `Artifacts and Notes`).
 - [x] (2026-10-17) Milestone 4: `MainWindow._path_taken_by_other_item` and `_warn_item_exists`; `rename_item` and `move_item` refuse an existing target and report `OSError` instead of raising; 3 Swedish strings added. No unit tests (dialog-driven, as planned); scripted real-window scenario run before and after (see `Artifacts and Notes`). 65 passed.
-- [ ] Milestone 5: report errors to the user and to a log file.
-- [ ] Full test run, manual verification, `AGENTS.md`/`README.md` updated, retrospective written.
+- [x] (2026-10-17) Milestones 3 and 4 committed as `17bdb79` and `fb9ee76`.
+- [x] (2026-10-17) Milestone 5: `app_logging.py` (`setup_logging`, `install_excepthook`, which also sets `threading.excepthook`); `main.py` sets the organisation and application names, installs logging and the hook, and saves through `_try_write_testlog` / `_report_save_failure`; `set_file_status`, `open_testlog` and `read_testlog_note_text` log failures; 3 Swedish strings added. `tests/test_app_logging.py` (5 tests); 70 passed. Real-window scenario run (see `Artifacts and Notes`).
+- [x] (2026-10-17) `AGENTS.md` and `README.md` updated (log location, `.tmp` files). `testlog.spec` unchanged: PyInstaller follows the imports from `main.py`; no packaged build was run.
+- [ ] Manual check on a real display (Linux and Windows), including the letter-case-only rename on Windows.
 
 
 ## Surprises & Discoveries
@@ -57,6 +59,12 @@ How to see it working: run `python -m pytest` and see new tests for each of the 
 - Decision: a brand-new file gets mode `0o666 & ~umask`, not the `0o600` that `mkstemp` gives.
   Rationale: the plan only covered keeping an existing file's mode; without this, every newly created note (save as, rename of the open note) would become owner-only, unlike before. The umask is read with the usual set-and-restore `os.umask` pair, which is only done on the GUI thread.
   Date/Author: 2026-10-17 / Claude.
+- Decision: `_try_write_testlog` catches every `Exception`, not just `OSError` and `zipfile.BadZipFile` as first planned.
+  Rationale: whatever goes wrong while saving, the outcome must be the same: the text stays in the editor, the user is told, and closing the window is refused. A narrower catch would let an unexpected error (for example `ValueError` from `zipfile`) skip that and reach the generic crash dialog while the close went ahead. The full traceback is still logged.
+  Date/Author: 2026-10-17 / Claude.
+- Decision: `install_excepthook` also sets `threading.excepthook`, logging only (no dialog).
+  Rationale: the full-text indexer runs in a background thread, where `sys.excepthook` is not used. A dialog cannot be shown from that thread, so it only logs.
+  Date/Author: 2026-10-17 / Claude.
 - Decision: a rename or move whose target already exists is refused, not auto-renamed to `name 2.testlog`.
   Rationale: the user typed or picked that name deliberately; silently choosing another name would surprise them. The `archive_item` action keeps its existing auto-numbering because there the user did not choose the target name.
   Date/Author: 2026-10-17 / Claude.
@@ -67,7 +75,11 @@ How to see it working: run `python -m pytest` and see new tests for each of the 
 
 ## Outcomes & Retrospective
 
-Milestone 1 (2026-10-17): images inserted from files with spaces or non-ASCII letters in their names now survive saving. The archive code is in `testlog_archive.py` and covered by tests. `_write_testlog` no longer writes `note.md` into the session folder (it uses `writestr`); nothing else read that copy. Milestone 2 (2026-10-17): every write of a `.testlog` file now goes through a temporary file in the same folder and `os.replace`, so an interrupted save leaves the previous version readable. Milestone 3 (2026-10-17): opening a damaged `.testlog` shows a warning and leaves the open note, its session folder and its images untouched; before, the next autosave rewrote the open note without its images. Milestone 4 (2026-10-17): renaming or moving onto an existing name now shows "<name> already exists." and changes nothing; before, the other file was silently overwritten on Linux. The case-only rename path (`Foo` to `foo`) relies on `os.path.samefile` and was not exercised, because WSL's ext4 is case-sensitive; check it on Windows. Milestone 5 remains.
+Milestone 1 (2026-10-17): images inserted from files with spaces or non-ASCII letters in their names now survive saving. The archive code is in `testlog_archive.py` and covered by tests. `_write_testlog` no longer writes `note.md` into the session folder (it uses `writestr`); nothing else read that copy. Milestone 2 (2026-10-17): every write of a `.testlog` file now goes through a temporary file in the same folder and `os.replace`, so an interrupted save leaves the previous version readable. Milestone 3 (2026-10-17): opening a damaged `.testlog` shows a warning and leaves the open note, its session folder and its images untouched; before, the next autosave rewrote the open note without its images. Milestone 4 (2026-10-17): renaming or moving onto an existing name now shows "<name> already exists." and changes nothing; before, the other file was silently overwritten on Linux. The case-only rename path (`Foo` to `foo`) relies on `os.path.samefile` and was not exercised, because WSL's ext4 is case-sensitive; check it on Windows.
+
+Milestone 5 (2026-10-17): failed saves now show a status bar message every time and one dialog until a save succeeds, closing is refused while saving fails, and every error (save, open, status change, unreadable file during indexing, unhandled exceptions in slots and threads) is written to `testlog-editor.log`.
+
+Overall: all four data-loss risks from the review are closed and each was shown failing before and passing after, either with a unit test (Milestones 1-3, 5) or a scripted real-window run (Milestones 3-5). The suite went from 53 to 70 tests. What remains: a hands-on check on a real display (all runs here were offscreen in WSL), the Windows-only paths (letter-case rename, `os.replace` blocked by another program), and a packaged build. Lesson: the scripted offscreen `MainWindow` runs, with `QSettings` redirected through `XDG_CONFIG_HOME`, were cheap and caught exactly the behaviours the unit tests could not reach; they are worth turning into real tests if the window gets a test seam later.
 
 
 ## Context and Orientation
@@ -250,7 +262,21 @@ After:
     rename a->c:      a = MISSING | c = content a
     warnings: ['b.testlog already exists.', 'b.testlog already exists.', 'a.testlog already exists.']
 
-To be filled in later: the final `pytest` summary line.
+Milestone 5, real window, workspace folder made read-only (`chmod 555`) after a first save, then typing and saving three times, closing, restoring permissions, autosaving, and raising `ZeroDivisionError` from a `QTimer` slot:
+
+    first save: True
+    autosave 0: False | status bar: Could not save note.testlog
+    autosave 1: False | status bar: Could not save note.testlog
+    autosave 2: False | status bar: Could not save note.testlog
+    dialogs: ['Could not save note.testlog. Your changes are still in the editor. Details were written to the log.']
+    close accepted while failing: False
+    after restore: Autosaved | modified: False
+    flag reset: True
+    excepthook dialog calls: ['.../TestLog Editor/TestLog Editor/testlog-editor.log']
+    log has save failure: True
+    log has slot crash: True
+
+Final suite: `70 passed`.
 
 
 ## Interfaces and Dependencies
@@ -286,3 +312,5 @@ At the end, `testlog_archive.py` exports:
 
 
 Revision note (2026-10-17): first version, written after a read-only review of `main.py` at commit `d856c30`.
+
+Revision note (2026-10-17): implementation complete for Milestones 1-5; Progress, Surprises, Decision Log, Artifacts and Outcomes updated as each milestone landed.

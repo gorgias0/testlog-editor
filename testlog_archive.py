@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 import tempfile
@@ -11,6 +12,8 @@ from testlog_utils import (
 
 
 NOTE_ENTRY = "note.md"
+
+logger = logging.getLogger("testlog")
 
 
 class TestlogArchiveError(Exception):
@@ -57,6 +60,7 @@ def read_testlog_note_text(path):
             with zf.open(NOTE_ENTRY) as note_file:
                 return strip_testlog_front_matter(note_file.read().decode("utf-8"))
     except Exception:
+        logger.warning("Could not read note text from %s", path, exc_info=True)
         return None
 
 

@@ -76,6 +76,15 @@ Notes:
 - Windows builds generate a real `.ico` from the app SVG so the packaged executable and taskbar use the TestLog Editor icon
 - PyInstaller builds are platform-specific, so build on the target OS
 
+## Troubleshooting
+
+Errors, including failed saves, are written to `testlog-editor.log`:
+
+- Linux: `~/.local/share/TestLog Editor/TestLog Editor/`
+- Windows: `%APPDATA%\TestLog Editor\TestLog Editor\`
+
+If a save fails, the text stays in the editor and the window will not close until a save succeeds. A hidden `.<name>.testlog.<random>.tmp` file left next to a note after a crash is safe to delete.
+
 ## Linux Launcher
 
 Install a desktop launcher on Linux:

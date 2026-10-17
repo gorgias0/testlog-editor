@@ -7,6 +7,7 @@ import re
 import base64
 import tempfile
 import ctypes
+import logging
 import threading
 from enum import Enum
 from html import escape as html_escape
@@ -41,6 +42,7 @@ from icons import (
     icon_from_svg,
     multi_icon_from_svg,
 )
+from app_logging import install_excepthook, setup_logging
 from diff_window import DiffWindow
 from document_find_bar import DocumentFindBar
 from json_tools import format_json_best_effort
@@ -74,6 +76,8 @@ try:
     from mdit_py_plugins.tasklists import tasklists_plugin
 except ImportError:
     tasklists_plugin = None
+
+logger = logging.getLogger("testlog")
 
 
 class SortMode(Enum):
@@ -3205,6 +3209,7 @@ class MainWindow(QMainWindow):
 
         self.autosave_timer = QTimer()
         self.autosave_timer.setInterval(2000)
+        self._save_failure_reported = False
         self.autosave_timer.timeout.connect(self.autosave)
 
         self.editor.textChanged.connect(self.timer.start)
@@ -3929,7 +3934,12 @@ class MainWindow(QMainWindow):
             self.save_file()
             return
 
-        self._write_status_to_testlog(path, normalized_status)
+        try:
+            self._write_status_to_testlog(path, normalized_status)
+        except Exception:
+            logger.exception("Could not change status of %s", path)
+            self.statusBar().showMessage(self._tr("Could not save {name}").format(name=os.path.basename(path)))
+            return
         self._update_fulltext_index_for_file(path)
         self.fs_model.refresh_status(path)
         self._refresh_sidebar_sort()
@@ -4403,8 +4413,8 @@ class MainWindow(QMainWindow):
         self.autosave_timer.stop()
         if not self.current_file or not self._editor_has_unsaved_changes():
             return
-        self.save_file()
-        self.statusBar().showMessage(self._tr("Autosaved"), 2000)
+        if self.save_file():
+            self.statusBar().showMessage(self._tr("Autosaved"), 2000)
 
     def new_file(self):
         if not self._flush_pending_changes():
@@ -4434,6 +4444,7 @@ class MainWindow(QMainWindow):
         try:
             session_dir, note_content = extract_testlog_archive(path)
         except TestlogArchiveError:
+            logger.warning("Could not open %s", path, exc_info=True)
             QMessageBox.warning(
                 self,
                 self._tr("Open testlog"),
@@ -4501,7 +4512,7 @@ class MainWindow(QMainWindow):
 
     def save_file(self):
         if self.current_file:
-            return self._write_testlog(self.current_file)
+            return self._try_write_testlog(self.current_file)
         else:
             return self.save_file_as()
 
@@ -4514,7 +4525,8 @@ class MainWindow(QMainWindow):
         if not path.endswith(".testlog"):
             path += ".testlog"
         previous_path = self.current_file
-        self._write_testlog(path)
+        if not self._try_write_testlog(path):
+            return False
         self.current_file = path
         if previous_path and os.path.abspath(previous_path) != os.path.abspath(path):
             if os.path.exists(previous_path):
@@ -4524,9 +4536,33 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(self._window_title(os.path.basename(path)))
         return True
 
+    def _try_write_testlog(self, path):
+        # Any failure keeps the text in the editor and returns False, which also stops
+        # closing the window or switching files from discarding the unsaved changes.
+        try:
+            return self._write_testlog(path)
+        except Exception:
+            logger.exception("Could not save %s", path)
+            self._report_save_failure(path)
+            return False
+
+    def _report_save_failure(self, path):
+        name = os.path.basename(path)
+        self.statusBar().showMessage(self._tr("Could not save {name}").format(name=name))
+        # Autosave retries every few seconds while typing; only the first failure gets a dialog.
+        if self._save_failure_reported:
+            return
+        self._save_failure_reported = True
+        QMessageBox.warning(
+            self,
+            self._tr("Save"),
+            self._tr("Could not save {name}. Your changes are still in the editor. Details were written to the log.").format(name=name),
+        )
+
     def _write_testlog(self, path):
         note_content = set_testlog_status(self.editor.toPlainText(), self.current_status)
         write_testlog_archive(path, note_content, self.images_dir)
+        self._save_failure_reported = False
         self.editor.document().setModified(False)
         self.autosave_timer.stop()
         self._update_fulltext_index_for_file(path)
@@ -5028,7 +5064,19 @@ if __name__ == "__main__":
             pass
 
     app = QApplication(sys.argv)
+    app.setOrganizationName("TestLog Editor")
+    app.setApplicationName("TestLog Editor")
+    log_path = setup_logging()
     app.setWindowIcon(multi_icon_from_svg(APP_ICON_SVG))
     window = MainWindow()
+
+    def show_error(path):
+        QMessageBox.critical(
+            window,
+            "TestLog Editor",
+            window._tr("Something went wrong. Details were written to {path}.").format(path=path or "stderr"),
+        )
+
+    install_excepthook(show_error, log_path)
     window.show()
     sys.exit(app.exec())

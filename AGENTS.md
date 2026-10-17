@@ -94,6 +94,8 @@ There is now a small unit test suite for extracted helper logic, but UI behavior
 
 - App state is written through `QSettings`.
 - Temporary session data is created under the operating system temp directory with a `testlog_*` prefix.
+- `.testlog` files are written atomically by `testlog_archive.py`: a hidden `.<name>.testlog.<random>.tmp` file appears next to the note during a save and is renamed over it. A leftover `.tmp` after a crash is safe to delete.
+- Errors are logged by `app_logging.py` to `testlog-editor.log` (rotated, 1 MB x 3) in Qt's `AppDataLocation`, e.g. `~/.local/share/TestLog Editor/TestLog Editor/` on Linux and `%APPDATA%\TestLog Editor\TestLog Editor\` on Windows.
 - Sample documents may live inside the chosen workspace and should not be rewritten unless the task calls for it.
 
 ## Notes For Future Agents
