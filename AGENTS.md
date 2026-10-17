@@ -102,6 +102,10 @@ There is now a small unit test suite for extracted helper logic, but UI behavior
 - `Trash/.trashed.json` records when each item was trashed and where it came from (`/`-separated paths, Unix timestamps). `trash.purge_trash` removes items whose later of trash time and last modification is over 30 days old; it runs from `MainWindow._set_workspace`. A missing record only gives an item a fresh 30 days.
 - All rules live in the Qt-free `trash.py` (tested in `tests/test_trash.py`). Any new code that walks the workspace with `os.walk` must call `trash.skip_trash_dirs` so trashed notes stay out of search, suggestions and similar features.
 
+## Archive
+
+- Archiving moves notes to `<workspace>/Archive/` in every language; the sidebar labels it "Arkiv" in Swedish (`WorkspaceFileSystemModel.archive_label`). Older versions created `Arkiv` in Swedish sessions; `archive_folder.merge_legacy_archives` folds it into `Archive` when a workspace opens (taken names get a number) and the window updates pins and recent files for the moved notes.
+
 ## File And State Side Effects
 
 - App state is written through `QSettings`.

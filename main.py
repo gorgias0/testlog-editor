@@ -44,6 +44,7 @@ from icons import (
     multi_icon_from_svg,
 )
 from app_logging import install_excepthook, setup_logging
+from archive_folder import ARCHIVE_DIR_NAME, LEGACY_ARCHIVE_DIR_NAMES, archive_dir, merge_legacy_archives
 from diff_window import DiffWindow
 from document_find_bar import DocumentFindBar
 from json_tools import format_json_best_effort
@@ -2583,6 +2584,7 @@ class MainWindow(QMainWindow):
             return
         self.workspace_dir = path
         self._purge_workspace_trash()
+        self._merge_legacy_archives()
         self.fs_model.setRootPath(path)
         if self._set_tree_workspace_root():
             self.tree.update()
@@ -2591,6 +2593,33 @@ class MainWindow(QMainWindow):
             self.settings.setValue("last_workspace", path)
             self._start_fulltext_indexing()
             self._open_most_recent_testlog()
+
+    def _merge_legacy_archives(self):
+        # Archive used to be named after the UI language ("Arkiv"); fold it into the one Archive folder.
+        try:
+            moves = merge_legacy_archives(self.workspace_dir)
+        except OSError:
+            logger.exception("Could not merge legacy archive folders in %s", self.workspace_dir)
+            return
+        for old_path, new_path in moves:
+            self._update_tracked_paths(old_path, new_path)
+            self._rewrite_recent_paths(old_path, new_path)
+        if moves:
+            self.refresh_pinned()
+            logger.info("Merged %d item(s) from legacy archive folders in %s", len(moves), self.workspace_dir)
+
+    def _rewrite_recent_paths(self, old_path, new_path):
+        old_abs = os.path.abspath(old_path)
+        recent = self.settings.value("recent_files", [])
+        if isinstance(recent, str):
+            recent = [recent]
+        updated = []
+        for recent_path in list(recent or []):
+            recent_abs = os.path.abspath(recent_path)
+            if recent_abs == old_abs or recent_abs.startswith(old_abs + os.sep):
+                recent_path = os.path.abspath(new_path) + recent_abs[len(old_abs):]
+            updated.append(recent_path)
+        self.settings.setValue("recent_files", updated)
 
     def _purge_workspace_trash(self):
         try:
@@ -3047,7 +3076,7 @@ class MainWindow(QMainWindow):
             return []
 
         workspace_abs = os.path.abspath(self.workspace_dir)
-        archive_dirs = {os.path.join(workspace_abs, name) for name in ("Archive", "Arkiv")}
+        archive_dirs = {os.path.join(workspace_abs, name) for name in (ARCHIVE_DIR_NAME, *LEGACY_ARCHIVE_DIR_NAMES)}
         tags = set()
         for root, dirs, files in os.walk(workspace_abs):
             skip_trash_dirs(workspace_abs, root, dirs)
@@ -3149,6 +3178,8 @@ class MainWindow(QMainWindow):
         self.tags_edit.setPlaceholderText(self._tr("Tags"))
         if hasattr(self, "fs_model"):
             self.fs_model.trash_label = self._tr("Trash")
+            # The menu's "Archive" is the verb ("Arkivera"); the folder is labelled with the noun.
+            self.fs_model.archive_label = "Arkiv" if self.current_language == "sv" else ARCHIVE_DIR_NAME
             self.tree.viewport().update()
         self.english_action.setChecked(self.current_language == "en")
         self.swedish_action.setChecked(self.current_language == "sv")
@@ -4387,10 +4418,10 @@ class MainWindow(QMainWindow):
         if was_open and not self._flush_pending_changes():
             return
 
-        archive_dir = os.path.join(self.workspace_dir, self._archive_folder_name())
-        os.makedirs(archive_dir, exist_ok=True)
+        target_dir = archive_dir(self.workspace_dir)
+        os.makedirs(target_dir, exist_ok=True)
 
-        new_path = os.path.join(archive_dir, os.path.basename(path))
+        new_path = os.path.join(target_dir, os.path.basename(path))
         if os.path.abspath(new_path) == os.path.abspath(path):
             return
 
@@ -4458,8 +4489,6 @@ class MainWindow(QMainWindow):
             self._tr("{name} already exists.").format(name=os.path.basename(new_path)),
         )
 
-    def _archive_folder_name(self):
-        return "Arkiv" if self.current_language == "sv" else "Archive"
 
     def _available_path(self, path):
         return available_path(path)
@@ -4618,8 +4647,7 @@ class MainWindow(QMainWindow):
             ):
                 return
 
-        # Both names, since the archive folder follows the UI language.
-        archive_dirs = {os.path.join(workspace_abs, name) for name in ("Archive", "Arkiv")}
+        archive_dirs = {os.path.join(workspace_abs, name) for name in (ARCHIVE_DIR_NAME, *LEGACY_ARCHIVE_DIR_NAMES)}
         latest_path = None
         latest_mtime = -1.0
 

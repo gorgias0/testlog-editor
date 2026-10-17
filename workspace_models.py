@@ -4,6 +4,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QFileInfo, QSortFilterProxyModel
 from PySide6.QtWidgets import QFileSystemModel
 
+from archive_folder import ARCHIVE_DIR_NAME
 from testlog_utils import (
     TESTLOG_STATUS_LABELS,
     format_testlog_tags,
@@ -57,12 +58,19 @@ class WorkspaceFileSystemModel(QFileSystemModel):
         # Trash has the same folder name on disk in every language; only its label is translated.
         self.trash_label = TRASH_DIR_NAME
         self.trash_icon = None
+        self.archive_label = ARCHIVE_DIR_NAME
 
-    def is_trash_dir(self, path):
+    def _is_workspace_child(self, path, name):
         root = self.rootPath()
         return bool(root) and os.path.normcase(os.path.normpath(path)) == os.path.normcase(
-            os.path.normpath(os.path.join(root, TRASH_DIR_NAME))
+            os.path.normpath(os.path.join(root, name))
         )
+
+    def is_trash_dir(self, path):
+        return self._is_workspace_child(path, TRASH_DIR_NAME)
+
+    def is_archive_dir(self, path):
+        return self._is_workspace_child(path, ARCHIVE_DIR_NAME)
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.ToolTipRole:
@@ -87,6 +95,8 @@ class WorkspaceFileSystemModel(QFileSystemModel):
                 return Path(path).stem
             if self.isDir(index) and self.is_trash_dir(path):
                 return self.trash_label
+            if self.isDir(index) and self.is_archive_dir(path):
+                return self.archive_label
 
         if role == TESTLOG_STATUS_ROLE and index.column() == 0:
             path = self.filePath(index)
