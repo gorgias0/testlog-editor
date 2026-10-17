@@ -1,11 +1,19 @@
 import os
+import shutil
 import stat
 import sys
+import tempfile
 import zipfile
 
 import pytest
 
-from testlog_archive import read_testlog_note_text, rewrite_testlog_status, write_testlog_archive
+import testlog_archive
+from testlog_archive import (
+    extract_testlog_archive,
+    read_testlog_note_text,
+    rewrite_testlog_status,
+    write_testlog_archive,
+)
 from testlog_utils import get_testlog_status, set_testlog_status
 
 
@@ -122,3 +130,57 @@ def test_new_file_gets_default_permissions(tmp_path):
         os.umask(umask)
 
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o644
+
+
+def _session_dirs():
+    return {name for name in os.listdir(tempfile.gettempdir()) if name.startswith("testlog_")}
+
+
+def test_extract_testlog_archive_returns_session_with_note_and_images(tmp_path):
+    images_dir = _images_dir(tmp_path, "shot.png")
+    note = "![a](images/shot.png)\n"
+    path = tmp_path / "note.testlog"
+    write_testlog_archive(str(path), note, str(images_dir))
+
+    session_dir, note_text = extract_testlog_archive(str(path))
+    try:
+        assert note_text == note
+        assert os.path.isfile(os.path.join(session_dir, "images", "shot.png"))
+    finally:
+        shutil.rmtree(session_dir)
+
+
+def test_extract_testlog_archive_without_note_returns_none_and_images_dir(tmp_path):
+    path = tmp_path / "empty.testlog"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("other.txt", "x")
+
+    session_dir, note_text = extract_testlog_archive(str(path))
+    try:
+        assert note_text is None
+        assert os.path.isdir(os.path.join(session_dir, "images"))
+    finally:
+        shutil.rmtree(session_dir)
+
+
+def test_extract_testlog_archive_rejects_non_zip_and_cleans_up(tmp_path):
+    path = tmp_path / "broken.testlog"
+    path.write_text("hello", encoding="utf-8")
+    before = _session_dirs()
+
+    with pytest.raises(testlog_archive.TestlogArchiveError):
+        extract_testlog_archive(str(path))
+
+    assert _session_dirs() == before
+
+
+def test_extract_testlog_archive_rejects_invalid_utf8_note(tmp_path):
+    path = tmp_path / "latin1.testlog"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("note.md", "sk\xe4rmbild".encode("latin-1"))
+    before = _session_dirs()
+
+    with pytest.raises(testlog_archive.TestlogArchiveError):
+        extract_testlog_archive(str(path))
+
+    assert _session_dirs() == before

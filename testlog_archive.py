@@ -13,6 +13,12 @@ from testlog_utils import (
 NOTE_ENTRY = "note.md"
 
 
+class TestlogArchiveError(Exception):
+    def __init__(self, path, message):
+        super().__init__(f"{path}: {message}")
+        self.path = path
+
+
 def _current_umask():
     # The umask can only be read by setting it; restore it immediately.
     umask = os.umask(0)
@@ -52,6 +58,25 @@ def read_testlog_note_text(path):
                 return strip_testlog_front_matter(note_file.read().decode("utf-8"))
     except Exception:
         return None
+
+
+def extract_testlog_archive(path):
+    # Extract into a fresh session folder so a damaged file never touches the open note's session.
+    session_dir = tempfile.mkdtemp(prefix="testlog_")
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            zf.extractall(session_dir)
+        os.makedirs(os.path.join(session_dir, "images"), exist_ok=True)
+
+        note_path = os.path.join(session_dir, NOTE_ENTRY)
+        note_text = None
+        if os.path.exists(note_path):
+            with open(note_path, "r", encoding="utf-8") as f:
+                note_text = f.read()
+    except (zipfile.BadZipFile, OSError, UnicodeDecodeError) as exc:
+        shutil.rmtree(session_dir, ignore_errors=True)
+        raise TestlogArchiveError(path, str(exc)) from exc
+    return session_dir, note_text
 
 
 def write_testlog_archive(path, note_content, images_dir):

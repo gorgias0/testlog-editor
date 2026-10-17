@@ -62,6 +62,7 @@ TRANSLATIONS = {
         "Select image": "Välj bild",
         "Image Files (*.png *.jpg *.jpeg *.gif *.bmp *.webp *.svg)": "Bildfiler (*.png *.jpg *.jpeg *.gif *.bmp *.webp *.svg)",
         "Could not copy image into note": "Kunde inte kopiera bilden till anteckningen",
+        "Could not open {name}. The file may be damaged.": "Kunde inte öppna {name}. Filen kan vara skadad.",
         "Formatting": "Formatering",
         "+ New File": "+ Ny fil",
         "+ Folder": "+ Mapp",

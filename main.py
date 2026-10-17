@@ -2,7 +2,6 @@ import sys
 import os
 import uuid
 import json
-import zipfile
 import shutil
 import re
 import base64
@@ -46,7 +45,13 @@ from diff_window import DiffWindow
 from document_find_bar import DocumentFindBar
 from json_tools import format_json_best_effort
 from text_tool_dialog import TextToolDialog
-from testlog_archive import read_testlog_note_text, rewrite_testlog_status, write_testlog_archive
+from testlog_archive import (
+    extract_testlog_archive,
+    read_testlog_note_text,
+    rewrite_testlog_status,
+    TestlogArchiveError,
+    write_testlog_archive,
+)
 from testlog_utils import (
     build_fulltext_search_results,
     DEFAULT_TESTLOG_STATUS,
@@ -2271,8 +2276,8 @@ class MainWindow(QMainWindow):
         self.settings.setValue("language", language_code)
         self._retranslate_ui()
 
-    def _new_session(self):
-        self.session_dir = tempfile.mkdtemp(prefix="testlog_")
+    def _new_session(self, session_dir=None):
+        self.session_dir = session_dir or tempfile.mkdtemp(prefix="testlog_")
         self.images_dir = os.path.join(self.session_dir, "images")
         os.makedirs(self.images_dir, exist_ok=True)
         self._preview_loaded = False
@@ -4392,23 +4397,29 @@ class MainWindow(QMainWindow):
     def open_testlog(self, path):
         self.autosave_timer.stop()
         self.close_find_bar()
+        try:
+            session_dir, note_content = extract_testlog_archive(path)
+        except TestlogArchiveError:
+            QMessageBox.warning(
+                self,
+                self._tr("Open testlog"),
+                self._tr("Could not open {name}. The file may be damaged.").format(name=os.path.basename(path)),
+            )
+            if self._editor_has_unsaved_changes():
+                self.autosave_timer.start()
+            return False
+
         shutil.rmtree(self.session_dir, ignore_errors=True)
-        self._new_session()
+        self._new_session(session_dir)
 
-        with zipfile.ZipFile(path, "r") as zf:
-            zf.extractall(self.session_dir)
-
-        note_path = os.path.join(self.session_dir, "note.md")
         self.current_status = DEFAULT_TESTLOG_STATUS
         self._set_status_combo(self.current_status)
         self.editor.clear()
-        if os.path.exists(note_path):
-            with open(note_path, "r", encoding="utf-8") as f:
-                note_content = f.read()
-                self.current_status = get_testlog_status(note_content)
-                note_content = set_testlog_status(note_content, self.current_status)
-                self._set_status_combo(self.current_status)
-                self.editor.setPlainText(note_content)
+        if note_content is not None:
+            self.current_status = get_testlog_status(note_content)
+            note_content = set_testlog_status(note_content, self.current_status)
+            self._set_status_combo(self.current_status)
+            self.editor.setPlainText(note_content)
 
         self.current_file = path
         self.editor.document().setModified(False)
@@ -4417,6 +4428,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(self._window_title(os.path.basename(path)))
         self._select_file_in_tree(path)
         self._add_to_recent(path)
+        return True
 
     def _select_file_in_tree(self, path, retry_attempts=0):
         source_index = self.fs_model.index(path)

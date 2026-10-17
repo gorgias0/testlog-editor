@@ -20,7 +20,8 @@ How to see it working: run `python -m pytest` and see new tests for each of the 
 - [x] (2026-10-17) Milestone 1: `testlog_archive.py` created (`read_testlog_note_text`, `write_testlog_archive`, `rewrite_testlog_status`); `main.py` `_write_testlog` and `_write_status_to_testlog` now call it; `collect_referenced_image_filenames` returns raw and decoded names; `tests/test_testlog_archive.py` added (3 tests). 56 passed. Smoke-tested through a real `MainWindow` (offscreen).
 - [x] (2026-10-17) Milestone 1 committed as `cc6e1e8`.
 - [x] (2026-10-17) Milestone 2: `_atomic_replace` in `testlog_archive.py`, used by `write_testlog_archive` and `rewrite_testlog_status`; existing permissions kept, new files get `0o666 & ~umask`. 5 tests added; 61 passed. The two failure tests fail against the Milestone 1 code (`2 failed, 6 passed`) and pass now. Real-window smoke test: file is `-rw-r--r--`, no `.tmp` left.
-- [ ] Milestone 3: make opening a file safe (extract into a fresh folder first, swap only on success).
+- [x] (2026-10-17) Milestone 2 committed as `898a5c6`.
+- [x] (2026-10-17) Milestone 3: `TestlogArchiveError` and `extract_testlog_archive` in `testlog_archive.py`; `MainWindow._new_session(session_dir=None)`; `open_testlog` extracts first, warns and returns `False` on failure, returns `True` on success; the now-unused `import zipfile` removed from `main.py`; Swedish string added. 4 tests added; 65 passed. Real-window scenario run before and after (see `Artifacts and Notes`).
 - [ ] Milestone 4: refuse rename/move onto an existing file.
 - [ ] Milestone 5: report errors to the user and to a log file.
 - [ ] Full test run, manual verification, `AGENTS.md`/`README.md` updated, retrospective written.
@@ -35,6 +36,8 @@ How to see it working: run `python -m pytest` and see new tests for each of the 
   Evidence: `PySide6 6.12.0 hook saw: ['ZeroDivisionError']` (offscreen, Python 3.12, 2026-10-17).
 - Observation: on Windows, `os.replace` raises `PermissionError` if another program (a sync client or virus scanner) holds the target open. The old file stays intact, which is the point of the change, but the save fails. Milestone 5's save-failure reporting is what makes this visible; retrying is left to the next autosave.
   Evidence: documented `os.replace` behaviour on Windows; not reproduced here (WSL only).
+- Observation: pytest tries to collect `TestlogArchiveError` as a test class because its name starts with `Test`, and warns (`PytestCollectionWarning: cannot collect test class 'TestlogArchiveError'`). The test module imports `testlog_archive` and refers to `testlog_archive.TestlogArchiveError` instead of importing the name directly.
+- Observation: when opening fails, the tree selection has already moved to the damaged file (the click selected it) while the editor still shows the previous note. This is cosmetic and left as is; the next click or save behaves correctly.
 
 
 ## Decision Log
@@ -64,7 +67,7 @@ How to see it working: run `python -m pytest` and see new tests for each of the 
 
 ## Outcomes & Retrospective
 
-Milestone 1 (2026-10-17): images inserted from files with spaces or non-ASCII letters in their names now survive saving. The archive code is in `testlog_archive.py` and covered by tests. `_write_testlog` no longer writes `note.md` into the session folder (it uses `writestr`); nothing else read that copy. Milestone 2 (2026-10-17): every write of a `.testlog` file now goes through a temporary file in the same folder and `os.replace`, so an interrupted save leaves the previous version readable. Milestones 3-5 remain.
+Milestone 1 (2026-10-17): images inserted from files with spaces or non-ASCII letters in their names now survive saving. The archive code is in `testlog_archive.py` and covered by tests. `_write_testlog` no longer writes `note.md` into the session folder (it uses `writestr`); nothing else read that copy. Milestone 2 (2026-10-17): every write of a `.testlog` file now goes through a temporary file in the same folder and `os.replace`, so an interrupted save leaves the previous version readable. Milestone 3 (2026-10-17): opening a damaged `.testlog` shows a warning and leaves the open note, its session folder and its images untouched; before, the next autosave rewrote the open note without its images. Milestones 4-5 remain.
 
 
 ## Context and Orientation
@@ -216,6 +219,22 @@ Milestone 1, end-to-end through `MainWindow` (offscreen, settings redirected wit
     link: images/my%20shot.png
     archive: ['images/my shot.png', 'note.md']
     reopened image exists: True
+
+Milestone 3, real window: save `good.testlog` with an image, open it, open a plain-text `broken.testlog`, type, save. Against commit `898a5c6` (before):
+
+    open broken returned: BadZipFile
+    session unchanged: False
+    image still in session: False
+    good archive after save: ['note.md']
+
+After:
+
+    open broken returned: False
+    warning: ['Could not open broken.testlog. The file may be damaged.']
+    current file still good: True
+    session unchanged: True
+    image still in session: True
+    good archive after save: ['images/shot.png', 'note.md']
 
 To be filled in later: the final `pytest` summary line.
 
