@@ -96,6 +96,12 @@ There is now a small unit test suite for extracted helper logic, but UI behavior
 - `note.md` starts with a front-matter block (`---` lines) holding `status:` and, optionally, `tags:` (lowercase, comma-separated single words). Helpers live in `testlog_utils.py` (`get/set_testlog_status`, `get/set_testlog_tags`); each setter keeps header lines it does not own, so add new keys the same way.
 - The sidebar reads both through `WorkspaceFileSystemModel` (`TESTLOG_STATUS_ROLE`, `TESTLOG_TAGS_ROLE`, cached per file modification time). Sidebar search terms starting with `#` filter by tag; folder matches are decided from the files on disk because `QFileSystemModel` loads folders lazily.
 
+## Trash
+
+- Delete moves items to `<workspace>/Trash/`, keeping their path relative to the workspace; deleting inside Trash is permanent. The folder is named `Trash` on disk in every language; only its sidebar label is translated (`WorkspaceFileSystemModel.trash_label`).
+- `Trash/.trashed.json` records when each item was trashed and where it came from (`/`-separated paths, Unix timestamps). `trash.purge_trash` removes items whose later of trash time and last modification is over 30 days old; it runs from `MainWindow._set_workspace`. A missing record only gives an item a fresh 30 days.
+- All rules live in the Qt-free `trash.py` (tested in `tests/test_trash.py`). Any new code that walks the workspace with `os.walk` must call `trash.skip_trash_dirs` so trashed notes stay out of search, suggestions and similar features.
+
 ## File And State Side Effects
 
 - App state is written through `QSettings`.

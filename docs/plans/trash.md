@@ -19,7 +19,9 @@ How to see it working: delete a note, open the Trash folder in the sidebar and f
 - [x] (2026-10-17) Milestone 2: `delete_item` moves to Trash outside it (new dialog texts) and deletes permanently inside it, refuses the Trash folder itself, and saves the open note first if it is being trashed; `_purge_workspace_trash` runs in `_set_workspace`; `skip_trash_dirs` in all five workspace walks, and the recent-files loop in `_open_most_recent_testlog` skips notes in Trash; 3 Swedish strings. 134 passed. Scripted real-window run (see `Artifacts and Notes`).
 - [x] (2026-10-17) Milestone 2 committed as `e6e09ff`.
 - [x] (2026-10-17) Milestone 3: `TRASH_ICON_SVG`; `WorkspaceFileSystemModel.trash_label`, `trash_icon`, `is_trash_dir`; Trash sorted last (`_sort_rank` rank 3); record file hidden by the proxy (`trash.is_trash_record_file`, renamed from the private `_is_record_file`); right-click menus for the Trash folder (Empty Trash only) and items in it (Restore, Delete); `restore_item`, `empty_workspace_trash`, `_is_trash_root`, `_is_trashed_item`; `rename_item` refuses the Trash folder; 6 Swedish strings (one more than planned: "Could not empty Trash."). 134 passed. Scripted real-window run and screenshots (see `Artifacts and Notes`).
-- [ ] Milestone 4: `README.md` and `AGENTS.md`; full test run; retrospective; manual check on a real display.
+- [x] (2026-10-17) Milestone 3 committed.
+- [x] (2026-10-17) Milestone 4: `README.md` (Highlights) and `AGENTS.md` (new "Trash" section) updated; full test run 134 passed; retrospective written.
+- [ ] Manual check on a real display (Windows build), including that `Trash/.trashed.json` stays hidden and that a note open in another program is skipped by the purge and removed on a later start.
 
 
 ## Surprises & Discoveries
@@ -73,7 +75,9 @@ Milestone 1 (2026-10-17): every Trash rule exists as a tested, Qt-free function.
 
 Milestone 2 (2026-10-17): Delete now moves to Trash, items in Trash are kept out of every search and scan, deleting inside Trash is permanent, and the 30-day purge runs when a workspace opens. Trash still looked like an ordinary folder in the sidebar after this milestone.
 
-Milestone 3 (2026-10-17): Trash is shown last with a bin icon and a translated label, its record file is hidden, items in it can be restored (and are then selected in their original folder) or deleted for good, and Trash can be emptied. Milestone 4 (docs, manual check on a real display) remains.
+Milestone 3 (2026-10-17): Trash is shown last with a bin icon and a translated label, its record file is hidden, items in it can be restored (and are then selected in their original folder) or deleted for good, and Trash can be emptied. 
+
+Overall (2026-10-17): Delete is now recoverable. Items go to a single `Trash` folder shown last in the sidebar with a translated label and bin icon, keep their original folder path, can be restored or deleted for good, and are purged 30 days after they were trashed or last edited, whichever is later. Trash is excluded from every workspace scan. The suite grew from 108 to 134 tests, plus scripted real-window runs for the app-level behaviour. Changes from the original plan are in the `Decision Log`: unrecorded empty folders are cleaned up rather than kept, restore refuses records that point outside the workspace, the open note is saved before it is trashed, and Delete on the Trash folder itself does nothing. Not done: a check on a real display (all runs were offscreen in WSL), and the Archive folder still splits by language (`Arkiv`/`Archive`); the same label-only approach used for Trash would fix it, but existing `Arkiv` folders would need merging. Lesson: driving the real window through its methods caught nothing wrong in the app this time, but it did expose a PySide6 quirk that would have made future check scripts hang; it is recorded in `Surprises & Discoveries`.
 
 
 ## Context and Orientation
@@ -213,3 +217,5 @@ Standard library only (`os`, `shutil`, `json`, `time`, `tempfile`, `logging`). A
 
 
 Revision note (2026-10-17): first version, written after reading `delete_item`, the context menu, the workspace walks and the sidebar models at commit `09e64fe`.
+
+Revision note (2026-10-17): implementation complete for Milestones 1-4; living sections updated as each milestone landed.
