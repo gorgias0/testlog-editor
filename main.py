@@ -1632,9 +1632,9 @@ class RecentFileItemDelegate(QStyledItemDelegate):
 
 class WorkspaceTreeItemDelegate(QStyledItemDelegate):
     STATUS_COLORS = {
-        "todo": "#737278",
-        "doing": "#2f5ca0",
-        "done": "#306440",
+        "todo": "#d4a72c",
+        "doing": "#2ea043",
+        "done": "#8b8b93",
     }
 
     def paint(self, painter, option, index):
