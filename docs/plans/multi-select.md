@@ -17,7 +17,8 @@ How to see it working: in a scratch workspace, click a note, Shift+click another
 - [x] (2026-10-18) Milestone 1: `ExtendedSelection` on the tree; `tree_item_clicked` ignores Shift/Ctrl clicks; `_selected_tree_paths()` (visible selected rows in on-screen order, falling back to the current row), `_tree_row_visible`, `_is_tree_item`; `trash.top_level_paths` with 3 tests (218 passed); the tree delegate paints the row background across the whole row. Scripted real-window run with real clicks and keys and screenshots (see `Artifacts and Notes`).
 - [x] (2026-10-18) Milestone 1 committed as `91140b3`.
 - [x] (2026-10-18) Milestone 2: cores `_trash_or_delete_one`, `_move_one`, `_archive_one`, `_restore_one` (single-item `delete_item`, `move_item`, `archive_item`, `restore_item` now wrap them); `bulk_set_status`, `bulk_add_tags`, `bulk_remove_tags`, `bulk_toggle_pin`, `bulk_archive`, `bulk_move`, `bulk_delete`, `bulk_restore`, `_report_bulk_result`, `_after_items_left_folder`; `_next_file_in_same_folder(path, exclude=())`; `testlog_utils.merge_testlog_tags` with 4 tests; 9 Swedish strings. 222 passed. Scripted bulk run and a re-run of the earlier single-item scripts (see `Artifacts and Notes`).
-- [ ] Milestone 3: the right-click menu, Delete key and Menu key act on the whole selection; translations; scripted check and screenshots.
+- [x] (2026-10-18) Milestone 2 committed as `e5a620d`.
+- [x] (2026-10-18) Milestone 3: `_show_tree_context_menu` makes a right-clicked row outside the selection the only selection and hands selections of more than one item to `_show_multi_item_menu` (header "{count} items selected"; Status, Add tags..., Remove tags..., Pin/Unpin, Move To..., Archive, Delete, with note-only entries disabled when no notes are selected; Restore and Delete when everything selected is in Trash); the Delete key uses `bulk_delete` for several items; F2 does nothing then. 222 passed; scripted real-window run (see `Artifacts and Notes`). No screenshots: the menu is a standard Qt menu, and its entries are listed in the run.
 - [ ] Milestone 4: `README.md` and `AGENTS.md`; full test run; retrospective; manual check on a real display.
 
 
@@ -54,7 +55,9 @@ How to see it working: in a scratch workspace, click a note, Shift+click another
 
 Milestone 1 (2026-10-18): the tree supports file-manager style multi-selection with mouse and keyboard, single-item behaviour (click opens, arrow preview) is unchanged, and selected rows are highlighted across the full width. No action uses the selection yet.
 
-Milestone 2 (2026-10-18): every tree action exists as a dialog-free core plus a single-item wrapper (unchanged behaviour) and a bulk version that asks once and reports once. Nothing in the UI calls the bulk versions yet; Milestones 3-4 remain.
+Milestone 2 (2026-10-18): every tree action exists as a dialog-free core plus a single-item wrapper (unchanged behaviour) and a bulk version that asks once and reports once. Nothing in the UI calls the bulk versions yet.
+
+Milestone 3 (2026-10-18): the right-click menu, the Menu key and Shift+F10, and the Delete key act on the whole selection; a right-click outside the selection selects only that row first. Milestone 4 (docs, manual check on a real display) remains.
 
 
 ## Context and Orientation
@@ -166,6 +169,18 @@ Milestone 2, bulk actions through `MainWindow` (scripted dialogs; one rename mad
     delete sprint + s1 inside: Move folder sprint to Trash? | only the folder trashed, no warnings
     delete 3, s2 locked    : Move 3 items to Trash? | summary '2 of 3 changed. / Could not move s2.testlog to Trash.'
     restore sprint, d1     : both back in place
+
+Milestone 3, real window with real clicks and keys; menus scripted through a `QMenu` subclass that records the entries ("(disabled)" marks disabled ones) and picks one by text:
+
+    select a..c, right-click b      -> ['3 items selected (disabled)', 'Status ▸', 'Add tags...', 'Remove tags...', 'Pin to Top', 'Move To...', 'Archive', 'Delete']
+       (chose Status/Done)          -> {'a': 'done', 'b': 'done', 'c': 'done', 'd': 'todo'}
+    right-click d (outside)         -> single-item menu | selection: ['d.testlog']
+    add tags 'td' to a,b            -> {'a': ['td'], 'b': ['td'], 'c': [], 'd': []}
+    folders only, right-click       -> Status, Add/Remove tags, Pin, Archive disabled; Move To... and Delete enabled
+    F2 with 2 selected              -> rename dialog opened: False
+    Menu key with 2 selected        -> ['2 items selected (disabled)', ...]
+    Delete key with a,b selected    -> question: Move 2 items to Trash? | both in Trash
+    2 trashed items, right-click    -> ['2 items selected (disabled)', 'Restore', 'Delete'] | both restored
 
 The earlier single-item scripts (archive status and failure, delete and archive neighbour selection, Trash milestones 2 and 3, the audit's batch 4) give the same results as before, except that after the last note of a folder is deleted or archived nothing stays selected (single-selection mode used to leave the folder highlighted).
 

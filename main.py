@@ -4437,6 +4437,19 @@ class MainWindow(QMainWindow):
         if not is_file and not is_dir:
             return
 
+        selected = self._selected_tree_paths()
+        if path not in selected:
+            # Right-click outside the selection makes that row the only selection, as in file
+            # managers, so the menu never acts on rows the user did not point at.
+            self.tree.selectionModel().setCurrentIndex(
+                index,
+                QItemSelectionModel.SelectionFlag.ClearAndSelect | QItemSelectionModel.SelectionFlag.Rows,
+            )
+            selected = [path]
+        if len(selected) > 1:
+            self._show_multi_item_menu(selected, global_pos)
+            return
+
         menu = QMenu(self)
 
         if self._is_trash_root(path):
@@ -4494,6 +4507,65 @@ class MainWindow(QMainWindow):
         elif chosen == archive_action:
             self.archive_item(path)
 
+    def _show_multi_item_menu(self, paths, global_pos):
+        menu = QMenu(self)
+        header = menu.addAction(self._tr("{count} items selected").format(count=len(paths)))
+        header.setEnabled(False)
+        menu.addSeparator()
+
+        if all(self._is_trashed_item(path) for path in paths):
+            restore_action = menu.addAction(self._tr("Restore"))
+            delete_action = menu.addAction(self._tr("Delete"))
+            chosen = menu.exec(global_pos)
+            if chosen == restore_action:
+                self.bulk_restore(paths)
+            elif chosen == delete_action:
+                self.bulk_delete(paths)
+            return
+
+        # Status, tags, pin and archive apply to notes outside Trash; Move To... and Delete to
+        # everything selected (folders included).
+        outside_trash = [path for path in paths if not (self.workspace_dir and is_in_trash(self.workspace_dir, path))]
+        notes = self._notes_in(outside_trash)
+
+        status_menu = menu.addMenu(self._tr("Status"))
+        status_actions = {}
+        statuses = {get_testlog_status(self.editor.toPlainText()) if self._is_open_file(path) else read_testlog_status_from_archive(path) for path in notes}
+        for status in TESTLOG_STATUS_OPTIONS:
+            action = status_menu.addAction(self._tr(TESTLOG_STATUS_LABELS[status]))
+            action.setCheckable(True)
+            action.setChecked(statuses == {status})
+            status_actions[action] = status
+        status_menu.setEnabled(bool(notes))
+        add_tags_action = menu.addAction(self._tr("Add tags..."))
+        remove_tags_action = menu.addAction(self._tr("Remove tags..."))
+        menu.addSeparator()
+        any_unpinned = not notes or any(path not in self.pinned_files for path in notes)
+        pin_action = menu.addAction(self._tr("Pin to Top") if any_unpinned else self._tr("Unpin"))
+        menu.addSeparator()
+        move_action = menu.addAction(self._tr("Move To..."))
+        archive_action = menu.addAction(self._tr("Archive"))
+        delete_action = menu.addAction(self._tr("Delete"))
+        for action in (add_tags_action, remove_tags_action, pin_action, archive_action):
+            action.setEnabled(bool(notes))
+        move_action.setEnabled(bool(outside_trash))
+
+        chosen = menu.exec(global_pos)
+        if chosen in status_actions:
+            self.bulk_set_status(notes, status_actions[chosen])
+        elif chosen == add_tags_action:
+            self.bulk_add_tags(notes)
+        elif chosen == remove_tags_action:
+            self.bulk_remove_tags(notes)
+        elif chosen == pin_action:
+            self.bulk_toggle_pin(notes)
+        elif chosen == move_action:
+            self.bulk_move(outside_trash)
+        elif chosen == archive_action:
+            self.bulk_archive(notes)
+        elif chosen == delete_action:
+            self.bulk_delete(paths)
+
     def _selected_tree_paths(self):
         # Selected notes and folders in on-screen order. Rows hidden inside a collapsed folder
         # stay selected in Qt's model but must not be acted on, so they are left out.
@@ -4533,11 +4605,18 @@ class MainWindow(QMainWindow):
         return path if is_file or is_dir else None
 
     def delete_selected_tree_item(self):
+        paths = self._selected_tree_paths()
+        if len(paths) > 1:
+            self.bulk_delete(paths)
+            return
         path = self._selected_tree_item_path()
         if path:
             self.delete_item(path)
 
     def rename_selected_tree_item(self):
+        # Renaming several items at once has no sensible meaning.
+        if len(self._selected_tree_paths()) > 1:
+            return
         path = self._selected_tree_item_path()
         if path:
             self.rename_item(path)
