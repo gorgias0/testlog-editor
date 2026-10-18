@@ -13,6 +13,7 @@ from testlog_utils import (
     get_testlog_status,
     guess_markdown_from_plain_text,
     is_valid_item_name,
+    merge_testlog_tags,
     normalize_testlog_status,
     resolve_preview_image_path,
     set_testlog_status,
@@ -207,3 +208,19 @@ def test_valid_item_names(name):
 )
 def test_invalid_item_names(name):
     assert not is_valid_item_name(name)
+
+
+def test_merge_tags_adds_new_tags_after_existing_ones():
+    assert merge_testlog_tags(["td", "meet"], add=["Login", "td"]) == ["td", "meet", "login"]
+
+
+def test_merge_tags_removes_only_tags_that_are_present():
+    assert merge_testlog_tags(["td", "meet"], remove=["MEET", "absent"]) == ["td"]
+
+
+def test_merge_tags_with_add_and_remove_together():
+    assert merge_testlog_tags(["td", "old"], add=["new"], remove=["old"]) == ["td", "new"]
+
+
+def test_merge_tags_on_untagged_note():
+    assert merge_testlog_tags([], add=["td meet"]) == ["td", "meet"]

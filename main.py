@@ -65,6 +65,7 @@ from testlog_utils import (
     build_fulltext_search_results,
     DEFAULT_TESTLOG_STATUS,
     format_testlog_tags,
+    merge_testlog_tags,
     get_testlog_status,
     get_testlog_tags,
     guess_markdown_from_plain_text,
@@ -85,6 +86,7 @@ from translations import TRANSLATIONS
 from trash import (
     TrashError,
     available_path,
+    top_level_paths,
     empty_trash,
     is_in_trash,
     move_to_trash,
@@ -4621,18 +4623,21 @@ class MainWindow(QMainWindow):
     def _is_trashed_item(self, path):
         return bool(self.workspace_dir) and is_in_trash(self.workspace_dir, path) and not self._is_trash_root(path)
 
-    def restore_item(self, path):
+    def _restore_one(self, path):
+        # Returns (restored path, None) or (None, error message); no dialogs.
         try:
             new_path = restore_from_trash(self.workspace_dir, path)
         except (TrashError, OSError):
             logger.exception("Could not restore %s from Trash", path)
-            QMessageBox.warning(
-                self,
-                self._tr("Restore"),
-                self._tr("Could not restore {name}.").format(name=os.path.basename(path)),
-            )
-            return
+            return None, self._tr("Could not restore {name}.").format(name=os.path.basename(path))
         self._update_tracked_paths(path, new_path)
+        return new_path, None
+
+    def restore_item(self, path):
+        new_path, error = self._restore_one(path)
+        if error:
+            QMessageBox.warning(self, self._tr("Restore"), error)
+            return
         self.refresh_pinned()
         # Unlike delete and archive, reveal the item: the user went to Trash to get it back.
         self._select_file_in_tree(new_path, retry_attempts=6)
@@ -4753,37 +4758,13 @@ class MainWindow(QMainWindow):
         if answer != QMessageBox.StandardButton.Yes:
             return
 
-        if permanent:
-            try:
-                if os.path.isdir(path):
-                    shutil.rmtree(path)
-                else:
-                    os.remove(path)
-            except OSError:
-                logger.exception("Could not delete %s", path)
-                QMessageBox.warning(
-                    self,
-                    self._tr("Confirm Delete"),
-                    self._tr("Could not delete {name}.").format(name=filename),
-                )
-                return
-        else:
-            # Save the open note first so Trash holds its latest text.
-            if was_open and not self._flush_pending_changes():
-                return
-            try:
-                move_to_trash(self.workspace_dir, path)
-            except (TrashError, OSError):
-                logger.exception("Could not move %s to Trash", path)
-                QMessageBox.warning(
-                    self,
-                    self._tr("Confirm Delete"),
-                    self._tr("Could not move {name} to Trash.").format(name=filename),
-                )
-                return
-
-        self._remove_tracked_paths(path)
-        self._remove_fulltext_index_entries_for_path(path)
+        # Save the open note first so Trash holds its latest text.
+        if not permanent and was_open and not self._flush_pending_changes():
+            return
+        error = self._trash_or_delete_one(path, permanent)
+        if error:
+            QMessageBox.warning(self, self._tr("Confirm Delete"), error)
+            return
         self.refresh_pinned()
         # Stay in the same folder, as archiving does.
         if was_open:
@@ -4799,6 +4780,44 @@ class MainWindow(QMainWindow):
             self.tree.clearSelection()
         self._start_fulltext_indexing()
 
+    def _trash_or_delete_one(self, path, permanent):
+        # Moves one item to Trash (or deletes it for good inside Trash) and forgets it in pins,
+        # recent files and the search index. Returns None or an error message; no dialogs.
+        # Callers save the open note first when it is being trashed.
+        name = os.path.basename(path)
+        try:
+            if permanent:
+                if os.path.isdir(path):
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
+            else:
+                move_to_trash(self.workspace_dir, path)
+        except (TrashError, OSError):
+            logger.exception("Could not %s %s", "delete" if permanent else "trash", path)
+            if permanent:
+                return self._tr("Could not delete {name}.").format(name=name)
+            return self._tr("Could not move {name} to Trash.").format(name=name)
+        self._remove_tracked_paths(path)
+        self._remove_fulltext_index_entries_for_path(path)
+        return None
+
+    def _move_one(self, path, destination):
+        # Moves one item into destination unless the name is taken. Returns None or an error
+        # message; no dialogs.
+        new_path = os.path.join(destination, os.path.basename(path))
+        if os.path.abspath(new_path) == os.path.abspath(path):
+            return None
+        if self._path_taken_by_other_item(path, new_path):
+            return self._tr("{name} already exists.").format(name=os.path.basename(new_path))
+        try:
+            os.rename(path, new_path)
+        except OSError:
+            logger.exception("Could not move %s", path)
+            return self._tr("Could not move {name}.").format(name=os.path.basename(path))
+        self._update_tracked_paths(path, new_path)
+        return None
+
     def move_item(self, path):
         destination = QFileDialog.getExistingDirectory(
             self,
@@ -4811,20 +4830,10 @@ class MainWindow(QMainWindow):
         new_path = os.path.join(destination, os.path.basename(path))
         if os.path.abspath(new_path) == os.path.abspath(path):
             return
-        if self._path_taken_by_other_item(path, new_path):
-            self._warn_item_exists(self._tr("Move Item"), new_path)
+        error = self._move_one(path, destination)
+        if error:
+            QMessageBox.warning(self, self._tr("Move Item"), error)
             return
-
-        try:
-            os.rename(path, new_path)
-        except OSError:
-            QMessageBox.warning(
-                self,
-                self._tr("Move Item"),
-                self._tr("Could not move {name}.").format(name=os.path.basename(path)),
-            )
-            return
-        self._update_tracked_paths(path, new_path)
         self.refresh_pinned()
         self._select_file_in_tree(new_path)
         self._start_fulltext_indexing()
@@ -4837,43 +4846,15 @@ class MainWindow(QMainWindow):
         if was_open and not self._flush_pending_changes():
             return
 
-        target_dir = archive_dir(self.workspace_dir)
-        os.makedirs(target_dir, exist_ok=True)
-
-        new_path = os.path.join(target_dir, os.path.basename(path))
-        if os.path.abspath(new_path) == os.path.abspath(path):
-            return
-
-        # Archiving means finished. Mark it done before moving, and leave the file where
-        # it is if that fails, so an archived note never keeps a stale status.
-        current_status = self.current_status if was_open else read_testlog_status_from_archive(path)
-        if current_status != "done" and not self.set_file_status(path, "done"):
-            if was_open:
-                # The editor already switched to "done"; put the old status back so a later
-                # autosave does not mark a note that was never archived as done.
-                self.current_status = current_status
-                self._set_status_combo(current_status)
-                self._replace_editor_text_preserving_cursor(
-                    set_testlog_status(self.editor.toPlainText(), current_status)
-                )
+        if self._is_inside_folder(os.path.abspath(path), archive_dir(self.workspace_dir)):
             return
 
         # Look up the neighbour before the move, while the archived file is still in the tree.
         next_path = self._next_file_in_same_folder(path)
-        new_path = self._available_path(new_path)
-        try:
-            os.rename(path, new_path)
-        except OSError:
-            logger.exception("Could not move %s to the archive", path)
-            if current_status != "done":
-                self.set_file_status(path, current_status)
-            QMessageBox.warning(
-                self,
-                self._tr("Archive"),
-                self._tr("Could not move {name}.").format(name=os.path.basename(path)),
-            )
+        error = self._archive_one(path)
+        if error:
+            QMessageBox.warning(self, self._tr("Archive"), error)
             return
-        self._update_tracked_paths(path, new_path)
         self.refresh_pinned()
 
         # Stay in the current folder instead of revealing the file inside the archive folder.
@@ -4891,7 +4872,224 @@ class MainWindow(QMainWindow):
             self.tree.clearSelection()
         self._start_fulltext_indexing()
 
-    def _next_file_in_same_folder(self, path):
+    # Bulk actions on the tree selection. Each runs the dialog-free "_one" part for every item,
+    # asks at most once beforehand, and reports all failures in one summary afterwards.
+
+    @staticmethod
+    def _notes_in(paths):
+        return [path for path in paths if path.endswith(".testlog") and os.path.isfile(path)]
+
+    def _affects_open_note(self, paths):
+        if not self.current_file:
+            return False
+        current = os.path.abspath(self.current_file)
+        return any(self._is_inside_folder(current, os.path.abspath(path)) for path in paths)
+
+    def _report_bulk_result(self, title, total, failures):
+        if not failures:
+            return
+        lines = [self._tr("{done} of {total} changed.").format(done=total - len(failures), total=total)]
+        lines += failures[:5]
+        if len(failures) > 5:
+            lines.append(self._tr("and {count} more").format(count=len(failures) - 5))
+        QMessageBox.warning(self, title, "\n".join(lines))
+
+    def _after_items_left_folder(self, was_open, next_path):
+        # Same follow-up as the single-item delete and archive: stay in the folder, and open
+        # the next note there if the open note went away.
+        self.refresh_pinned()
+        if was_open:
+            if next_path and os.path.isfile(next_path):
+                self.open_testlog(next_path)
+            else:
+                self.current_file = None
+                self.editor.clear()
+                self.tree.clearSelection()
+                self.setWindowTitle(self._window_title())
+        elif next_path:
+            self._select_file_in_tree(next_path)
+        else:
+            self.tree.clearSelection()
+        self._start_fulltext_indexing()
+
+    def bulk_set_status(self, paths, status):
+        notes = self._notes_in(paths)
+        failures = [
+            self._tr("Could not save {name}").format(name=os.path.basename(path))
+            for path in notes
+            if not self.set_file_status(path, status)
+        ]
+        self._report_bulk_result(self._tr("Status"), len(notes), failures)
+
+    def _current_tags(self, path):
+        if self._is_open_file(path):
+            return get_testlog_tags(self.editor.toPlainText())
+        return self.fs_model.tags_for_path(path)
+
+    def bulk_add_tags(self, paths):
+        notes = self._notes_in(paths)
+        if not notes:
+            return
+        text, accepted = QInputDialog.getText(self, self._tr("Add tags..."), self._tr("Tags to add (comma-separated):"))
+        if accepted and normalize_testlog_tags(text):
+            self._bulk_edit_tags(notes, add=[text])
+
+    def bulk_remove_tags(self, paths):
+        notes = self._notes_in(paths)
+        present = []
+        for path in notes:
+            present += [tag for tag in self._current_tags(path) if tag not in present]
+        if not present:
+            return
+        label = self._tr("Tags to remove (comma-separated):") + "\n" + format_testlog_tags(sorted(present))
+        text, accepted = QInputDialog.getText(self, self._tr("Remove tags..."), label)
+        if accepted and normalize_testlog_tags(text):
+            self._bulk_edit_tags(notes, remove=[text])
+
+    def _bulk_edit_tags(self, notes, add=(), remove=()):
+        failures = []
+        for path in notes:
+            current = self._current_tags(path)
+            merged = merge_testlog_tags(current, add=add, remove=remove)
+            if merged != current and not self.set_file_tags(path, merged):
+                failures.append(self._tr("Could not save {name}").format(name=os.path.basename(path)))
+        self._report_bulk_result(self._tr("Tags"), len(notes), failures)
+
+    def bulk_toggle_pin(self, paths):
+        notes = self._notes_in(paths)
+        if not notes:
+            return
+        if any(path not in self.pinned_files for path in notes):
+            self.pinned_files += [path for path in notes if path not in self.pinned_files]
+        else:
+            self.pinned_files = [path for path in self.pinned_files if path not in notes]
+        self._save_pinned_files()
+        self.refresh_pinned()
+
+    def bulk_archive(self, paths):
+        if not self.workspace_dir:
+            return
+        archive = archive_dir(self.workspace_dir)
+        notes = [path for path in self._notes_in(paths) if not self._is_inside_folder(os.path.abspath(path), archive)]
+        if not notes:
+            return
+        was_open = self._affects_open_note(notes)
+        if was_open and not self._flush_pending_changes():
+            return
+        next_path = self._next_file_in_same_folder(notes[0], exclude=notes)
+        failures = [error for error in (self._archive_one(path) for path in notes) if error]
+        self._after_items_left_folder(was_open, next_path)
+        self._report_bulk_result(self._tr("Archive"), len(notes), failures)
+
+    def bulk_move(self, paths):
+        items = top_level_paths([path for path in paths if not self._is_trash_root(path)])
+        if not items:
+            return
+        destination = QFileDialog.getExistingDirectory(self, self._tr("Move Item"), self._selected_directory_for_new_items())
+        if not destination:
+            return
+        failures = []
+        moved = []
+        for path in items:
+            if os.path.isdir(path) and self._is_inside_folder(os.path.abspath(destination), os.path.abspath(path)):
+                # A folder cannot be moved into itself or one of its sub-folders.
+                failures.append(self._tr("Could not move {name}.").format(name=os.path.basename(path)))
+                continue
+            error = self._move_one(path, destination)
+            if error:
+                failures.append(error)
+            else:
+                moved.append(os.path.join(destination, os.path.basename(path)))
+        self.refresh_pinned()
+        if moved:
+            self._select_file_in_tree(moved[0], retry_attempts=6)
+        self._start_fulltext_indexing()
+        self._report_bulk_result(self._tr("Move Item"), len(items), failures)
+
+    def bulk_delete(self, paths):
+        items = top_level_paths([path for path in paths if self._is_tree_item(path) and not self._is_trash_root(path)])
+        if not items:
+            return
+        if len(items) == 1:
+            # One item left (for example a folder plus notes inside it): use the single-item
+            # dialog, which names it.
+            self.delete_item(items[0])
+            return
+        permanent = {path: not self.workspace_dir or is_in_trash(self.workspace_dir, path) for path in items}
+        # One question for all; if anything would be deleted for good, say so.
+        question = (
+            "Delete {count} items? This cannot be undone."
+            if any(permanent.values())
+            else "Move {count} items to Trash?"
+        )
+        answer = QMessageBox.question(self, self._tr("Confirm Delete"), self._tr(question).format(count=len(items)))
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        was_open = self._affects_open_note(items)
+        # Save the open note first if it goes to Trash, so Trash holds its latest text.
+        trashing_open_note = any(self._affects_open_note([path]) and not permanent[path] for path in items)
+        if trashing_open_note and not self._flush_pending_changes():
+            return
+        next_path = self._next_file_in_same_folder(items[0], exclude=items)
+        failures = [error for error in (self._trash_or_delete_one(path, permanent[path]) for path in items) if error]
+        self._after_items_left_folder(was_open and self.current_file is None, next_path)
+        self._report_bulk_result(self._tr("Confirm Delete"), len(items), failures)
+
+    def bulk_restore(self, paths):
+        items = top_level_paths([path for path in paths if self._is_trashed_item(path)])
+        failures = []
+        restored = []
+        for path in items:
+            new_path, error = self._restore_one(path)
+            if error:
+                failures.append(error)
+            else:
+                restored.append(new_path)
+        self.refresh_pinned()
+        if restored:
+            self._select_file_in_tree(restored[0], retry_attempts=6)
+        self._start_fulltext_indexing()
+        self._report_bulk_result(self._tr("Restore"), len(items), failures)
+
+    def _archive_one(self, path):
+        # Marks one note done and moves it into Archive. Returns None or an error message; no
+        # dialogs. Callers save the open note first.
+        was_open = bool(self.current_file) and os.path.abspath(path) == os.path.abspath(self.current_file)
+        target_dir = archive_dir(self.workspace_dir)
+        name = os.path.basename(path)
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+        except OSError:
+            logger.exception("Could not create the archive folder %s", target_dir)
+            return self._tr("Could not move {name}.").format(name=name)
+
+        # Archiving means finished. Mark it done before moving, and leave the file where
+        # it is if that fails, so an archived note never keeps a stale status.
+        current_status = self.current_status if was_open else read_testlog_status_from_archive(path)
+        if current_status != "done" and not self.set_file_status(path, "done"):
+            if was_open:
+                # The editor already switched to "done"; put the old status back so a later
+                # autosave does not mark a note that was never archived as done.
+                self.current_status = current_status
+                self._set_status_combo(current_status)
+                self._replace_editor_text_preserving_cursor(
+                    set_testlog_status(self.editor.toPlainText(), current_status)
+                )
+            return self._tr("Could not save {name}").format(name=name)
+
+        new_path = self._available_path(os.path.join(target_dir, name))
+        try:
+            os.rename(path, new_path)
+        except OSError:
+            logger.exception("Could not move %s to the archive", path)
+            if current_status != "done":
+                self.set_file_status(path, current_status)
+            return self._tr("Could not move {name}.").format(name=name)
+        self._update_tracked_paths(path, new_path)
+        return None
+
+    def _next_file_in_same_folder(self, path, exclude=()):
+        excluded = {os.path.normcase(os.path.abspath(p)) for p in exclude}
         index = self.fs_proxy_model.mapFromSource(self.fs_model.index(path))
         if not index.isValid():
             return None
@@ -4903,7 +5101,11 @@ class MainWindow(QMainWindow):
         for candidate_row in [*range(row + 1, row_count), *range(row - 1, -1, -1)]:
             source_index = self.fs_proxy_model.mapToSource(self.fs_proxy_model.index(candidate_row, 0, parent))
             candidate_path = self.fs_model.filePath(source_index)
-            if candidate_path.endswith(".testlog") and os.path.isfile(candidate_path):
+            if (
+                candidate_path.endswith(".testlog")
+                and os.path.isfile(candidate_path)
+                and os.path.normcase(os.path.abspath(candidate_path)) not in excluded
+            ):
                 return candidate_path
         return None
 

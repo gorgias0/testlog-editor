@@ -125,6 +125,16 @@ def normalize_testlog_tags(value):
     return tags
 
 
+def merge_testlog_tags(current, add=(), remove=()):
+    # Bulk tag edits: each note keeps the tags the edit does not mention, in their order.
+    removed = set(normalize_testlog_tags(list(remove)))
+    merged = [tag for tag in normalize_testlog_tags(list(current)) if tag not in removed]
+    for tag in normalize_testlog_tags(list(add)):
+        if tag not in merged and tag not in removed:
+            merged.append(tag)
+    return merged
+
+
 def format_testlog_tags(tags):
     return ", ".join(tags)
 
