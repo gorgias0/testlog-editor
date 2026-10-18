@@ -96,6 +96,11 @@ There is now a small unit test suite for extracted helper logic, but UI behavior
 - `note.md` starts with a front-matter block (`---` lines) holding `status:` and, optionally, `tags:` (lowercase, comma-separated single words). Helpers live in `testlog_utils.py` (`get/set_testlog_status`, `get/set_testlog_tags`); each setter keeps header lines it does not own, so add new keys the same way.
 - The sidebar reads both through `WorkspaceFileSystemModel` (`TESTLOG_STATUS_ROLE`, `TESTLOG_TAGS_ROLE`, cached per file modification time). Sidebar search terms starting with `#` filter by tag; folder matches are decided from the files on disk because `QFileSystemModel` loads folders lazily.
 
+## Tree Actions
+
+- The file tree uses extended selection. `MainWindow._selected_tree_paths()` returns the visible selected items in on-screen order; `trash.top_level_paths` drops items inside a selected folder.
+- Each tree action is split into a dialog-free per-item core (`_trash_or_delete_one`, `_move_one`, `_archive_one`, `_restore_one`, plus `set_file_status`/`set_file_tags`) that returns an error message instead of showing one, a single-item wrapper (`delete_item`, `move_item`, ...) that asks and moves the selection, and a bulk version (`bulk_*`) that asks once and reports all failures through `_report_bulk_result`. New actions should follow the same split.
+
 ## Trash
 
 - Delete moves items to `<workspace>/Trash/`, keeping their path relative to the workspace; deleting inside Trash is permanent. The folder is named `Trash` on disk in every language; only its sidebar label is translated (`WorkspaceFileSystemModel.trash_label`).

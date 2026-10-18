@@ -19,7 +19,9 @@ How to see it working: in a scratch workspace, click a note, Shift+click another
 - [x] (2026-10-18) Milestone 2: cores `_trash_or_delete_one`, `_move_one`, `_archive_one`, `_restore_one` (single-item `delete_item`, `move_item`, `archive_item`, `restore_item` now wrap them); `bulk_set_status`, `bulk_add_tags`, `bulk_remove_tags`, `bulk_toggle_pin`, `bulk_archive`, `bulk_move`, `bulk_delete`, `bulk_restore`, `_report_bulk_result`, `_after_items_left_folder`; `_next_file_in_same_folder(path, exclude=())`; `testlog_utils.merge_testlog_tags` with 4 tests; 9 Swedish strings. 222 passed. Scripted bulk run and a re-run of the earlier single-item scripts (see `Artifacts and Notes`).
 - [x] (2026-10-18) Milestone 2 committed as `e5a620d`.
 - [x] (2026-10-18) Milestone 3: `_show_tree_context_menu` makes a right-clicked row outside the selection the only selection and hands selections of more than one item to `_show_multi_item_menu` (header "{count} items selected"; Status, Add tags..., Remove tags..., Pin/Unpin, Move To..., Archive, Delete, with note-only entries disabled when no notes are selected; Restore and Delete when everything selected is in Trash); the Delete key uses `bulk_delete` for several items; F2 does nothing then. 222 passed; scripted real-window run (see `Artifacts and Notes`). No screenshots: the menu is a standard Qt menu, and its entries are listed in the run.
-- [ ] Milestone 4: `README.md` and `AGENTS.md`; full test run; retrospective; manual check on a real display.
+- [x] (2026-10-18) Milestone 3 committed as `0469e84`.
+- [x] (2026-10-18) Milestone 4: `README.md` (Highlights) and `AGENTS.md` (new "Tree Actions" section) updated; full test run 222 passed; retrospective written.
+- [ ] Manual check on a real display (Windows build): Shift/Ctrl+click, the multi-item menu, and whether the Trash folder shows newly trashed items (see `Surprises & Discoveries`).
 
 
 ## Surprises & Discoveries
@@ -57,7 +59,9 @@ Milestone 1 (2026-10-18): the tree supports file-manager style multi-selection w
 
 Milestone 2 (2026-10-18): every tree action exists as a dialog-free core plus a single-item wrapper (unchanged behaviour) and a bulk version that asks once and reports once. Nothing in the UI calls the bulk versions yet.
 
-Milestone 3 (2026-10-18): the right-click menu, the Menu key and Shift+F10, and the Delete key act on the whole selection; a right-click outside the selection selects only that row first. Milestone 4 (docs, manual check on a real display) remains.
+Milestone 3 (2026-10-18): the right-click menu, the Menu key and Shift+F10, and the Delete key act on the whole selection; a right-click outside the selection selects only that row first. 
+
+Overall (2026-10-18): the tree supports file-manager style multi-selection with mouse and keyboard, and every tree action works on a selection with one question and one summary, while single-item behaviour is unchanged. Each action is now a dialog-free core with single and bulk wrappers. The suite grew from 215 to 222 tests; most of the behaviour was checked with scripted real-window runs. Not done: a check on a real display (all runs were offscreen in WSL), and the separate observation that the Trash folder sometimes stays empty in the sidebar after items are moved into it (PySide6 6.11, offscreen), which needs its own investigation. Lesson: re-running the scripts from earlier plans after the refactor was cheap and confirmed the single-item paths were untouched; two of them had gone stale (a removed method, a moved file location) and needed small fixes first.
 
 
 ## Context and Orientation
@@ -201,3 +205,5 @@ On `MainWindow`: `_selected_tree_paths()`, `_trash_or_delete_one(path, permanent
 
 
 Revision note (2026-10-17): first version, written after reading the tree setup, `tree_item_clicked`, the key handling in `eventFilter`, `_show_tree_context_menu` and the per-item actions in `main.py` at commit `3fe6d0b`.
+
+Revision note (2026-10-18): implementation complete for Milestones 1-4; living sections updated as each milestone landed.
