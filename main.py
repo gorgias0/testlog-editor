@@ -26,10 +26,10 @@ from PySide6.QtWidgets import (
     QLineEdit, QStyle, QSizePolicy, QToolButton,
     QDialog, QDialogButtonBox, QFormLayout, QCheckBox,
     QListWidget, QListWidgetItem, QGraphicsDropShadowEffect,
-    QStyledItemDelegate, QStyleOptionViewItem, QCompleter,
+    QStyledItemDelegate, QStyleOptionViewItem, QCompleter, QAbstractItemView,
 )
 from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, Signal, QItemSelectionModel, QSize, QPoint, QFileInfo, QRect, QStringListModel
-from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QTextBlockFormat, QIntValidator, QShortcut, QColor, QTextCharFormat, QSyntaxHighlighter, QDesktopServices, QPainter, QPalette
+from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QTextBlockFormat, QIntValidator, QShortcut, QColor, QTextCharFormat, QSyntaxHighlighter, QDesktopServices, QPainter, QPalette, QIcon
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineContextMenuRequest, QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebChannel import QWebChannel
@@ -1842,6 +1842,14 @@ class WorkspaceTreeItemDelegate(QStyledItemDelegate):
         item_option = QStyleOptionViewItem(option)
         reserved = dot_space + (tags_width + self.TAGS_GAP if tags_text else 0)
         item_option.rect = option.rect.adjusted(0, 0, -reserved, 0)
+        # Paint the row background (selection, hover) across the whole row, including the tags
+        # and the status dot, so selected rows read as one block.
+        full_row = QStyleOptionViewItem(option)
+        self.initStyleOption(full_row, index)
+        full_row.text = ""
+        full_row.icon = QIcon()
+        style = option.widget.style() if option.widget is not None else QApplication.style()
+        style.drawPrimitive(QStyle.PrimitiveElement.PE_PanelItemViewItem, full_row, painter, option.widget)
         super().paint(painter, item_option, index)
 
         if tags_text:
@@ -3519,6 +3527,8 @@ class MainWindow(QMainWindow):
         self.tree.setItemDelegate(WorkspaceTreeItemDelegate(self.tree))
         self.tree.setHeaderHidden(True)
         self.tree.setSortingEnabled(True)
+        # File-manager selection: Shift+click/arrows for a range, Ctrl+click/Ctrl+Space to toggle.
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         # Dölj kolumner utom namn
         self.tree.hideColumn(1)
@@ -4482,6 +4492,33 @@ class MainWindow(QMainWindow):
         elif chosen == archive_action:
             self.archive_item(path)
 
+    def _selected_tree_paths(self):
+        # Selected notes and folders in on-screen order. Rows hidden inside a collapsed folder
+        # stay selected in Qt's model but must not be acted on, so they are left out.
+        rows = [index for index in self.tree.selectionModel().selectedRows() if self._tree_row_visible(index)]
+        if not rows and self.tree.currentIndex().isValid():
+            rows = [self.tree.currentIndex()]
+        rows.sort(key=lambda index: self.tree.visualRect(index).top())
+        paths = []
+        for index in rows:
+            path = self.fs_model.filePath(self.fs_proxy_model.mapToSource(index))
+            if self._is_tree_item(path) and path not in paths:
+                paths.append(path)
+        return paths
+
+    def _tree_row_visible(self, index):
+        parent = index.parent()
+        while parent.isValid() and parent != self.tree.rootIndex():
+            if not self.tree.isExpanded(parent):
+                return False
+            parent = parent.parent()
+        return True
+
+    def _is_tree_item(self, path):
+        if not path or (self.workspace_dir and os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(self.workspace_dir))):
+            return False
+        return (path.endswith(".testlog") and os.path.isfile(path)) or os.path.isdir(path)
+
     def _selected_tree_item_path(self):
         index = self.tree.currentIndex()
         if not index.isValid():
@@ -5014,6 +5051,10 @@ class MainWindow(QMainWindow):
         self.tree.setFocus()
 
     def tree_item_clicked(self, index):
+        # Shift+click and Ctrl+click only build a selection; opening (and saving) notes while
+        # selecting would be surprising.
+        if QApplication.keyboardModifiers() & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier):
+            return
         source_index = self.fs_proxy_model.mapToSource(index)
         path = self.fs_model.filePath(source_index)
         if path.endswith(".testlog"):

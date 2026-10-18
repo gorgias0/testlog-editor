@@ -13,6 +13,7 @@ from trash import (
     purge_trash,
     restore_from_trash,
     skip_trash_dirs,
+    top_level_paths,
 )
 
 DAY = 86400
@@ -303,3 +304,25 @@ def test_purge_keeps_folder_with_newer_nested_record(workspace):
 
     assert purge_trash(workspace, now=NOW) == []
     assert os.path.isdir(folder)
+
+
+def test_top_level_paths_drops_items_inside_selected_folders(tmp_path):
+    folder = str(tmp_path / "tdialog")
+    inner = str(tmp_path / "tdialog" / "login.testlog")
+    deeper = str(tmp_path / "tdialog" / "sub" / "x.testlog")
+    other = str(tmp_path / "top.testlog")
+
+    assert top_level_paths([inner, folder, other, deeper]) == [folder, other]
+
+
+def test_top_level_paths_keeps_siblings_with_a_common_prefix(tmp_path):
+    first = str(tmp_path / "Sprint")
+    second = str(tmp_path / "Sprint 2" / "a.testlog")
+
+    assert top_level_paths([first, second]) == [first, second]
+
+
+def test_top_level_paths_removes_duplicates(tmp_path):
+    path = str(tmp_path / "a.testlog")
+
+    assert top_level_paths([path, path]) == [path]

@@ -44,6 +44,21 @@ def skip_trash_dirs(workspace, root, dirs):
         dirs[:] = [name for name in dirs if os.path.normcase(name) != os.path.normcase(TRASH_DIR_NAME)]
 
 
+def top_level_paths(paths):
+    """Drop paths that lie inside another path of the list, keeping the original order.
+
+    Acting on a folder already takes its contents along, so selected items inside a selected
+    folder must not be moved or trashed a second time.
+    """
+    normalized = [_norm(path) for path in paths]
+    result = []
+    for path, key in zip(paths, normalized):
+        inside_other = any(other != key and key.startswith(other.rstrip(os.sep) + os.sep) for other in normalized)
+        if not inside_other and key not in [_norm(kept) for kept in result]:
+            result.append(path)
+    return result
+
+
 def available_path(path):
     if not os.path.exists(path):
         return path
