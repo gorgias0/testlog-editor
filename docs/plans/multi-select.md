@@ -21,7 +21,7 @@ How to see it working: in a scratch workspace, click a note, Shift+click another
 - [x] (2026-10-18) Milestone 3: `_show_tree_context_menu` makes a right-clicked row outside the selection the only selection and hands selections of more than one item to `_show_multi_item_menu` (header "{count} items selected"; Status, Add tags..., Remove tags..., Pin/Unpin, Move To..., Archive, Delete, with note-only entries disabled when no notes are selected; Restore and Delete when everything selected is in Trash); the Delete key uses `bulk_delete` for several items; F2 does nothing then. 222 passed; scripted real-window run (see `Artifacts and Notes`). No screenshots: the menu is a standard Qt menu, and its entries are listed in the run.
 - [x] (2026-10-18) Milestone 3 committed as `0469e84`.
 - [x] (2026-10-18) Milestone 4: `README.md` (Highlights) and `AGENTS.md` (new "Tree Actions" section) updated; full test run 222 passed; retrospective written.
-- [ ] Manual check on a real display (Windows build): Shift/Ctrl+click, the multi-item menu, and whether the Trash folder shows newly trashed items (see `Surprises & Discoveries`).
+- [ ] Manual check on a real display (Windows build): Shift/Ctrl+click and the multi-item menu.
 
 
 ## Surprises & Discoveries
@@ -33,8 +33,8 @@ How to see it working: in a scratch workspace, click a note, Shift+click another
 - Observation: the tree delegate drew the selection only behind the name, leaving the tags and status dot unhighlighted; harmless for one row, but a multi-selection looked broken.
   Evidence: screenshots before and after the full-row `PE_PanelItemViewItem` paint in `WorkspaceTreeItemDelegate.paint`.
 - Observation: with the selection reduced by `top_level_paths` (a folder plus a note inside it), `bulk_delete` asked "Move 1 items to Trash?". It now hands a single remaining item to `delete_item`, which names it ("Move folder sprint to Trash?").
-- Observation (not caused by this plan): in scripted offscreen runs with PySide6 6.11.2, the sidebar's Trash folder often stays empty after items are moved into it, although they are on disk; in 4 of 5 runs nothing appeared within 2.5 s. `QFileSystemModel` appears to have listed the new, still empty Trash folder and then missed the files arriving. The same happens at commit `7e6449a` (Trash milestone 3), so it is independent of multi-select. Whether it happens on Windows is unknown; it needs its own investigation.
-  Evidence: `trash_children_probe.py` scratch runs: `Trash rows []` four times, `['tdialog', 'top']` once.
+- Observation (corrected 2026-10-18): an apparent bug where the sidebar's Trash folder stayed empty after items were moved into it turned out to be a mistake in the check scripts, not in the app. The scripts looked up the Trash folder's `QModelIndex` once and kept using it after `QFileSystemModel` had inserted the new rows. Qt does not keep a plain `QModelIndex` valid across model changes, so the stale index read as zero rows or crashed the script (segmentation fault). Looking the index up again before each read gave the right rows in 10 of 10 runs, and the app itself never keeps a tree index across model changes (menus act on file paths after `exec`).
+  Evidence: the same probe with the index kept: `Trash rows []` in several runs plus segmentation faults (exit 139); with the index looked up per read: `Trash rows ['tdialog', 'top']` in 10 of 10 runs.
 
 
 ## Decision Log
@@ -61,7 +61,7 @@ Milestone 2 (2026-10-18): every tree action exists as a dialog-free core plus a 
 
 Milestone 3 (2026-10-18): the right-click menu, the Menu key and Shift+F10, and the Delete key act on the whole selection; a right-click outside the selection selects only that row first. 
 
-Overall (2026-10-18): the tree supports file-manager style multi-selection with mouse and keyboard, and every tree action works on a selection with one question and one summary, while single-item behaviour is unchanged. Each action is now a dialog-free core with single and bulk wrappers. The suite grew from 215 to 222 tests; most of the behaviour was checked with scripted real-window runs. Not done: a check on a real display (all runs were offscreen in WSL), and the separate observation that the Trash folder sometimes stays empty in the sidebar after items are moved into it (PySide6 6.11, offscreen), which needs its own investigation. Lesson: re-running the scripts from earlier plans after the refactor was cheap and confirmed the single-item paths were untouched; two of them had gone stale (a removed method, a moved file location) and needed small fixes first.
+Overall (2026-10-18): the tree supports file-manager style multi-selection with mouse and keyboard, and every tree action works on a selection with one question and one summary, while single-item behaviour is unchanged. Each action is now a dialog-free core with single and bulk wrappers. The suite grew from 215 to 222 tests; most of the behaviour was checked with scripted real-window runs. Not done: a check on a real display (all runs were offscreen in WSL), and nothing else: the Trash folder that seemed to stay empty in the sidebar was a stale `QModelIndex` in the check scripts, not an app bug (see `Surprises & Discoveries`). Lesson: re-running the scripts from earlier plans after the refactor was cheap and confirmed the single-item paths were untouched; two of them had gone stale (a removed method, a moved file location) and needed small fixes first.
 
 
 ## Context and Orientation
@@ -207,3 +207,5 @@ On `MainWindow`: `_selected_tree_paths()`, `_trash_or_delete_one(path, permanent
 Revision note (2026-10-17): first version, written after reading the tree setup, `tree_item_clicked`, the key handling in `eventFilter`, `_show_tree_context_menu` and the per-item actions in `main.py` at commit `3fe6d0b`.
 
 Revision note (2026-10-18): implementation complete for Milestones 1-4; living sections updated as each milestone landed.
+
+Revision note (2026-10-18): corrected the Trash observation after finding it was caused by the check scripts keeping a stale `QModelIndex`.

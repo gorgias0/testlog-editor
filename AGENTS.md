@@ -111,6 +111,12 @@ There is now a small unit test suite for extracted helper logic, but UI behavior
 
 - Archiving moves notes to `<workspace>/Archive/` in every language; the sidebar labels it "Arkiv" in Swedish (`WorkspaceFileSystemModel.archive_label`). Older versions created `Arkiv` in Swedish sessions; `archive_folder.merge_legacy_archives` folds it into `Archive` when a workspace opens (taken names get a number) and the window updates pins and recent files for the moved notes.
 
+## Scripted UI Checks
+
+- Throwaway scripts that drive `MainWindow` offscreen (`QT_QPA_PLATFORM=offscreen`, with `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `TMPDIR` pointed at a scratch folder) are the usual way to check UI behaviour here.
+- Look up tree indexes (`fs_model.index(path)`, `fs_proxy_model.mapFromSource(...)`) again after anything that can change the model, including waiting for file changes; a kept `QModelIndex` goes stale and reads as zero rows or crashes the script.
+- PySide6 ignores replacing `QMenu.exec` on the class; to script context menus, replace `main.QMenu` with a subclass that overrides `exec`.
+
 ## File And State Side Effects
 
 - App state is written through `QSettings`.
