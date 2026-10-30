@@ -54,6 +54,42 @@ TESTLOG_PINNED_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 
 </svg>'''
 
 
+# Flat line icons for the file tree. {stroke} is replaced with a theme colour by themed_icon,
+# and {accent} with the pin marker colour, so the icons follow the light and dark theme.
+FOLDER_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <path d="M1.5 4.5a1 1 0 011-1h3.2l1.5 1.5h6.3a1 1 0 011 1v6.5a1 1 0 01-1 1h-11a1 1 0 01-1-1z" fill="none" stroke="{stroke}" stroke-width="1.2" stroke-linejoin="round"/>
+</svg>'''
+
+FOLDER_PINNED_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <path d="M1.5 4.5a1 1 0 011-1h3.2l1.5 1.5h6.3a1 1 0 011 1v6.5a1 1 0 01-1 1h-11a1 1 0 01-1-1z" fill="none" stroke="{stroke}" stroke-width="1.2" stroke-linejoin="round"/>
+  <circle cx="12.5" cy="3.5" r="2.6" fill="{accent}"/>
+</svg>'''
+
+NOTE_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <path d="M4 1.5h5.5L13 5v9a.5.5 0 01-.5.5h-8.5a.5.5 0 01-.5-.5V2a.5.5 0 01.5-.5z" fill="none" stroke="{stroke}" stroke-width="1.2" stroke-linejoin="round"/>
+  <path d="M9.5 1.5V5H13M5.5 8h5M5.5 10.5h5" fill="none" stroke="{stroke}" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>'''
+
+NOTE_PINNED_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <path d="M4 1.5h5.5L13 5v9a.5.5 0 01-.5.5h-8.5a.5.5 0 01-.5-.5V2a.5.5 0 01.5-.5z" fill="none" stroke="{stroke}" stroke-width="1.2" stroke-linejoin="round"/>
+  <path d="M5.5 8h5M5.5 10.5h5" fill="none" stroke="{stroke}" stroke-width="1.2" stroke-linecap="round"/>
+  <circle cx="12.5" cy="3.5" r="2.6" fill="{accent}"/>
+</svg>'''
+
+FOLDER_ADD_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <path d="M1.5 4.5a1 1 0 011-1h3.2l1.5 1.5h6.3a1 1 0 011 1v6.5a1 1 0 01-1 1h-11a1 1 0 01-1-1z" fill="none" stroke="{stroke}" stroke-width="1.2" stroke-linejoin="round"/>
+  <path d="M8 7.5v3.5M6.25 9.25h3.5" fill="none" stroke="{stroke}" stroke-width="1.2" stroke-linecap="round"/>
+</svg>'''
+
+TRASH_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <path d="M2.5 4h11M6 4V2.5h4V4M3.5 4l.8 9.5h7.4l.8-9.5M6.5 6.5v4.5M9.5 6.5v4.5" fill="none" stroke="{stroke}" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>'''
+
+
+def themed_icon(svg_template, color, size=20, accent="#2563eb"):
+    return icon_from_svg(svg_template.replace("{stroke}", color).replace("{accent}", accent), size=size)
+
+
 def icon_from_svg(svg_text, size=64):
     renderer = QSvgRenderer(QByteArray(svg_text.encode("utf-8")))
     pixmap = QPixmap(size, size)

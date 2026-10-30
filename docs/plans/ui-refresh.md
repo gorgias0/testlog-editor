@@ -17,7 +17,8 @@ How to see it working: run `python main.py`, open a workspace, open a note. The 
 ## Progress
 
 - [x] (2026-10-30) Plan written; mockups agreed (direction A, light and dark).
-- [ ] Milestone 1: theme palette and polish (palettes, sidebar, tree rows, line icons, editor margins, status bar).
+- [x] (2026-10-30) Milestone 1: new palette keys and values (light and dark); sidebar on its own background with rounded controls, an accent "+ New note" button and an icon-only new-folder button; 28-pixel tree rows with a full-row highlight and no dotted focus frame; flat `{stroke}` line icons (`themed_icon`) re-rendered on theme change; status dots themed in the tree and the recent-files switcher; editor without a box border and with left/top padding; status bar "N characters · N without spaces" plus the selected counts while text is selected (`format_editor_counts`, 3 tests). 227 passed. Screenshots in both themes and a scripted check of live theme switching and the counts (see `Artifacts and Notes`).
+- [ ] Milestone 1 commit (waiting for the user's approval) and Windows build for the user.
 - [ ] Milestone 2: compact toolbar (icon buttons, Heading drop-down, checklist button, Edit/Split/Preview switch).
 - [ ] Milestone 3: note header bar (folder, name, status pill, tag chips).
 - [ ] Milestone 4 (optional, prototyping): setting to hide the front-matter lines in the editor.
@@ -26,7 +27,13 @@ How to see it working: run `python main.py`, open a workspace, open a note. The 
 
 ## Surprises & Discoveries
 
-(None yet.)
+- Observation: the style sheet rule `QTreeView::branch:selected` did not stop Qt from painting the indent area left of a selected row in the palette's default highlight blue; setting the tree's `QPalette` Highlight and HighlightedText roles to `row_selected_bg`/`row_selected_text` (in `_apply_theme`) makes the indent part of the same highlight.
+  Evidence: offscreen screenshot crops before and after; before, a solid blue block left of the selected row in both themes.
+- Observation: Qt style sheet padding on the editor (`QTextEdit`) also moves its scrollbar, so right padding left a strip between the scrollbar and the preview; the editor uses top and left padding only.
+  Evidence: screenshot with `padding: 14px 20px 0 24px` showed the gap; `padding: 10px 0 0 20px` does not.
+- Observation: the status bar counts never listened to `selectionChanged`, so clearing a selection without moving the cursor left stale selected numbers; harmless before, visible now that the selected part only appears while text is selected. `selectionChanged` now also starts the counts timer.
+  Evidence: scripted check printed "… · 12 selected (10 without spaces)" after `clearSelection()` before the fix and the totals only after it.
+- Observation: the "+ Folder" text no longer fit next to "+ New note" and the sort button at the default sidebar width; the new-folder button is icon-only (its tooltip and accessible name keep the text) and the default sidebar width is 260 pixels (a saved splitter state still wins).
 
 
 ## Decision Log
@@ -42,6 +49,12 @@ How to see it working: run `python main.py`, open a workspace, open a note. The 
   Date/Author: 2026-10-30 / Claude.
 - Decision: hiding the front-matter lines in the editor (milestone 4) is a separate, opt-in setting, off by default, and may be dropped.
   Rationale: hidden text blocks change how the cursor, selection, undo and copy behave in the editor; the rest of the refresh must not depend on it.
+  Date/Author: 2026-10-30 / Claude.
+- Decision: the status bar keeps both selected numbers ("12 selected (10 without spaces)") rather than only the count with spaces.
+  Rationale: character counts with and without spaces are used when testing field limits; dropping one would remove information the old status bar gave.
+  Date/Author: 2026-10-30 / Claude.
+- Decision: no separate preview background colour; the preview uses `panel_bg` like the editor (pure white in the light theme).
+  Rationale: `_preview_theme_assets` is also used for PDF export with the light theme, and a tinted preview background would tint exported PDFs.
   Date/Author: 2026-10-30 / Claude.
 - Decision: each milestone is committed separately, only after the user approves the commit; nothing is pushed without approval.
   Rationale: the user's standing rules (no commit or push without being told each time).
@@ -140,6 +153,15 @@ Every step edits code only; no notes or settings are rewritten except through th
 
 
 ## Artifacts and Notes
+
+Milestone 1 scripted check (offscreen, scratch workspace, light theme then `_set_theme_mode("dark")`):
+
+    light: dot doing #1a7f37 | icon pixel ['#565f6a', '#56606a', '#575f69']
+    dark:  dot doing #57ab5a | icon pixel ['#acbac6', '#acbac7', '#adbac7']
+    status bar: 2,316 characters · 1,885 without spaces
+    with selection: 2,316 characters · 1,885 without spaces · 12 selected (10 without spaces)
+    cleared: 2,316 characters · 1,885 without spaces
+    swedish: 2 316 tecken · 1 885 utan blanksteg | button: + Ny anteckning | folder tooltip: Ny mapp i vald mapp (Ctrl+Shift+N)
 
 The agreed mockups (static HTML, not code to copy) are in the canvas https://claude.ai/artifact/57Wrx1bXZnsArYqcakqk1d: "Today" (a screenshot of the app before this plan), "A · Clean native" and "A · Clean native (dark)". The colours in `Plan of Work` are taken from those frames.
 

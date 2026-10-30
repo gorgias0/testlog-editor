@@ -37,13 +37,15 @@ from markdown_it import MarkdownIt
 from styles import PREVIEW_STYLE
 from icons import (
     APP_ICON_SVG,
-    FOLDER_ICON_SVG,
-    FOLDER_PINNED_ICON_SVG,
-    TESTLOG_ICON_SVG,
-    TESTLOG_PINNED_ICON_SVG,
-    TRASH_ICON_SVG,
+    FOLDER_ADD_LINE_SVG,
+    FOLDER_LINE_SVG,
+    FOLDER_PINNED_LINE_SVG,
+    NOTE_LINE_SVG,
+    NOTE_PINNED_LINE_SVG,
+    TRASH_LINE_SVG,
     icon_from_svg,
     multi_icon_from_svg,
+    themed_icon,
 )
 from app_logging import install_excepthook, setup_logging
 from archive_folder import ARCHIVE_DIR_NAME, LEGACY_ARCHIVE_DIR_NAMES, archive_dir, merge_legacy_archives
@@ -111,6 +113,23 @@ class SortMode(Enum):
     MODIFIED = "modified"
     CREATED = "created"
     STATUS = "status"
+
+
+def format_editor_counts(translate, language, total, without_ws, selected, selected_without_ws):
+    # Swedish groups thousands with a (non-breaking) space, English with a comma.
+    separator = "\u00a0" if language == "sv" else ","
+
+    def number(value):
+        return f"{value:,}".replace(",", separator)
+
+    text = translate("{with_ws} characters · {without_ws} without spaces").format(
+        with_ws=number(total), without_ws=number(without_ws)
+    )
+    if selected:
+        text += translate(" · {sel_with_ws} selected ({sel_without_ws} without spaces)").format(
+            sel_with_ws=number(selected), sel_without_ws=number(selected_without_ws)
+        )
+    return text
 
 
 class ViewMode(Enum):
@@ -1792,7 +1811,8 @@ class RecentFileItemDelegate(QStyledItemDelegate):
             dot_x = modified_rect.left() - status_width + ((status_width - dot_size) // 2)
             dot_y = filename_rect.center().y() - (dot_size // 2)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            painter.setBrush(QColor(WorkspaceTreeItemDelegate.STATUS_COLORS.get(status, WorkspaceTreeItemDelegate.STATUS_COLORS["todo"])))
+            status_colors = self.colors.get("status", WorkspaceTreeItemDelegate.STATUS_COLORS)
+            painter.setBrush(QColor(status_colors.get(status, status_colors["todo"])))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(QRect(dot_x, dot_y, dot_size, dot_size))
 
@@ -1821,7 +1841,22 @@ class WorkspaceTreeItemDelegate(QStyledItemDelegate):
     TAGS_GAP = 8
     TAGS_MIN_WIDTH = 28
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.status_colors = dict(self.STATUS_COLORS)
+
+    def set_status_colors(self, colors):
+        self.status_colors.update(colors)
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        size.setHeight(max(size.height(), 28))
+        return size
+
     def paint(self, painter, option, index):
+        # The selected row's highlight already shows where the cursor is; skip Qt's dotted focus frame.
+        option = QStyleOptionViewItem(option)
+        option.state &= ~QStyle.StateFlag.State_HasFocus
         status = index.data(TESTLOG_STATUS_ROLE)
         if not status:
             super().paint(painter, option, index)
@@ -1870,7 +1905,7 @@ class WorkspaceTreeItemDelegate(QStyledItemDelegate):
 
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setBrush(QColor(self.STATUS_COLORS.get(status, self.STATUS_COLORS["todo"])))
+        painter.setBrush(QColor(self.status_colors.get(status, self.status_colors["todo"])))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(dot_rect)
         painter.restore()
@@ -1971,6 +2006,7 @@ class RecentFilesSwitcher(QDialog):
                 "shadow": QColor(15, 23, 42, 90),
             }
 
+        colors["status"] = {"todo": palette["status_todo"], "doing": palette["status_doing"], "done": palette["status_done"]}
         self.item_delegate.set_colors(colors)
         self.shadow.setColor(colors["shadow"])
         self.setStyleSheet(f"""
@@ -2294,11 +2330,11 @@ class MainWindow(QMainWindow):
         active_theme = theme_mode or self.theme_mode
         if active_theme == "dark":
             return {
-                "window_bg": "#1f232a",
-                "chrome_bg": "#22272e",
-                "chrome_hover": "#373e47",
-                "panel_bg": "#2a3038",
-                "panel_border": "#4b5563",
+                "window_bg": "#1c2128",
+                "chrome_bg": "#1c2128",
+                "chrome_hover": "#2d333b",
+                "panel_bg": "#22272e",
+                "panel_border": "#373e47",
                 "text": "#e6edf3",
                 "muted_text": "#adbac7",
                 "link": "#93c5fd",
@@ -2316,15 +2352,27 @@ class MainWindow(QMainWindow):
                 "scrollbar_thumb_hover": "#6b7788",
                 "selection_bg": "#2563eb",
                 "selection_text": "#ffffff",
+                "sidebar_bg": "#1c2128",
+                "control_bg": "#2d333b",
+                "control_border": "#444c56",
+                "accent": "#2563eb",
+                "accent_text": "#ffffff",
+                "row_selected_bg": "#1f3a63",
+                "row_selected_text": "#ffffff",
+                "chip_bg": "#2d333b",
+                "chip_text": "#cdd9e5",
+                "status_doing": "#57ab5a",
+                "status_todo": "#c69026",
+                "status_done": "#768390",
             }
         return {
-            "window_bg": "#e9edf3",
-            "chrome_bg": "#dde4ec",
-            "chrome_hover": "#d2dae5",
-            "panel_bg": "#f8fafc",
-            "panel_border": "#c5cfdb",
-            "text": "#17202b",
-            "muted_text": "#526070",
+            "window_bg": "#f6f7f9",
+            "chrome_bg": "#f6f7f9",
+            "chrome_hover": "#e8ebef",
+            "panel_bg": "#ffffff",
+            "panel_border": "#e3e6ea",
+            "text": "#1f2328",
+            "muted_text": "#57606a",
             "link": "#2563eb",
             "code_bg": "#eef2f7",
             "code_border": "#cfd8e3",
@@ -2340,6 +2388,18 @@ class MainWindow(QMainWindow):
             "scrollbar_thumb_hover": "#9aa9bb",
             "selection_bg": "#bfdbfe",
             "selection_text": "#17202b",
+            "sidebar_bg": "#f6f7f9",
+            "control_bg": "#ffffff",
+            "control_border": "#d8dce1",
+            "accent": "#2563eb",
+            "accent_text": "#ffffff",
+            "row_selected_bg": "#dbe7fd",
+            "row_selected_text": "#0b3a8f",
+            "chip_bg": "#eef1f4",
+            "chip_text": "#3d444d",
+            "status_doing": "#1a7f37",
+            "status_todo": "#bf8700",
+            "status_done": "#8c959f",
         }
 
     def _editor_scrollbar_stylesheet(self, theme_mode=None):
@@ -2704,16 +2764,87 @@ class MainWindow(QMainWindow):
             QSplitter::handle:hover {{
                 background: {palette["chrome_hover"]};
             }}
+            QToolBar {{
+                border: none;
+                border-bottom: 1px solid {palette["panel_border"]};
+            }}
+            QStatusBar {{
+                border-top: 1px solid {palette["panel_border"]};
+                color: {palette["muted_text"]};
+            }}
+            QStatusBar QLabel {{
+                color: {palette["muted_text"]};
+                padding: 0 6px;
+            }}
+            QWidget#sidebar {{
+                background: {palette["sidebar_bg"]};
+                border-right: 1px solid {palette["panel_border"]};
+            }}
+            QWidget#sidebar QLineEdit {{
+                background: {palette["control_bg"]};
+                border: 1px solid {palette["control_border"]};
+                border-radius: 6px;
+                padding: 5px 8px;
+            }}
+            QWidget#sidebar QPushButton, QWidget#sidebar QToolButton {{
+                background: {palette["control_bg"]};
+                color: {palette["text"]};
+                border: 1px solid {palette["control_border"]};
+                border-radius: 6px;
+                padding: 5px 8px;
+            }}
+            QWidget#sidebar QPushButton:hover, QWidget#sidebar QToolButton:hover {{
+                background: {palette["chrome_hover"]};
+            }}
+            QWidget#sidebar QPushButton#newNoteButton {{
+                background: {palette["accent"]};
+                color: {palette["accent_text"]};
+                border: 1px solid {palette["accent"]};
+                font-weight: 600;
+            }}
+            QWidget#sidebar QPushButton#newNoteButton:hover {{
+                background: #1d4ed8;
+                border-color: #1d4ed8;
+            }}
+            QWidget#sidebar QTreeView {{
+                background: {palette["sidebar_bg"]};
+                border: none;
+                outline: 0;
+            }}
+            QWidget#sidebar QTreeView::item {{
+                border-radius: 6px;
+                padding: 0 4px;
+            }}
+            QWidget#sidebar QTreeView::item:hover:!selected {{
+                background: {palette["chrome_hover"]};
+            }}
+            QWidget#sidebar QTreeView::item:selected {{
+                background: {palette["row_selected_bg"]};
+                color: {palette["row_selected_text"]};
+            }}
             {self._editor_scrollbar_stylesheet()}
             """
         )
+        if hasattr(self, "fs_model"):
+            self._apply_tree_icons()
+        if hasattr(self, "tree"):
+            # Qt paints the indent area left of a selected row with the palette's highlight colour,
+            # which the style sheet does not reach; match it to the row so the highlight is one block.
+            tree_palette = self.tree.palette()
+            tree_palette.setColor(QPalette.ColorRole.Highlight, QColor(palette["row_selected_bg"]))
+            tree_palette.setColor(QPalette.ColorRole.HighlightedText, QColor(palette["row_selected_text"]))
+            self.tree.setPalette(tree_palette)
+        if hasattr(self, "tree_delegate"):
+            self.tree_delegate.set_status_colors(
+                {"todo": palette["status_todo"], "doing": palette["status_doing"], "done": palette["status_done"]}
+            )
         if hasattr(self, "editor"):
             self._apply_editor_stylesheet()
         if self.diff_window is not None:
             self.diff_window.apply_theme(palette)
         if hasattr(self, "preview"):
             self.preview.setStyleSheet(
-                f"background: {palette['panel_bg']}; border: 1px solid {palette['panel_border']};"
+                f"background: {palette['panel_bg']}; border: none; border-left: 1px solid {palette['panel_border']};"
             )
             self.preview.page().setBackgroundColor(QColor(palette["panel_bg"]))
         if hasattr(self, "toggle_btn"):
@@ -2726,6 +2857,20 @@ class MainWindow(QMainWindow):
             self.fulltext_search_dialog.apply_theme(palette, self.theme_mode)
         if self.recent_files_switcher is not None:
             self.recent_files_switcher.apply_theme(palette, self.theme_mode)
+
+    def _apply_tree_icons(self):
+        palette = self._theme_palette()
+        stroke, accent = palette["muted_text"], palette["accent"]
+        # Rendered at twice the 20 px row icon size so they stay sharp on high-DPI screens.
+        self.fs_model.folder_icon = themed_icon(FOLDER_LINE_SVG, stroke, size=40, accent=accent)
+        self.fs_model.folder_pinned_icon = themed_icon(FOLDER_PINNED_LINE_SVG, stroke, size=40, accent=accent)
+        self.fs_model.testlog_icon = themed_icon(NOTE_LINE_SVG, stroke, size=40, accent=accent)
+        self.fs_model.testlog_pinned_icon = themed_icon(NOTE_PINNED_LINE_SVG, stroke, size=40, accent=accent)
+        self.fs_model.trash_icon = themed_icon(TRASH_LINE_SVG, stroke, size=40, accent=accent)
+        if hasattr(self, "btn_new_folder"):
+            self.btn_new_folder.setIcon(themed_icon(FOLDER_ADD_LINE_SVG, palette["text"], size=40))
+        if hasattr(self, "tree"):
+            self.tree.viewport().update()
 
     def _editor_selection_background_color(self):
         palette = self._theme_palette()
@@ -2750,7 +2895,8 @@ class MainWindow(QMainWindow):
             QTextEdit {{
                 background: {palette['panel_bg']};
                 color: {palette['text']};
-                border: 1px solid {palette['panel_border']};
+                border: none;
+                padding: 10px 0 0 20px;
                 selection-background-color: {selection_bg};
                 selection-color: {selection_text};
             }}
@@ -3425,8 +3571,8 @@ class MainWindow(QMainWindow):
         self.status_combo.setToolTip(self._tr("Status"))
         self.toggle_btn.setToolTip(self._tr("Toggle editor/preview (Ctrl+E or F11)"))
 
-        self.btn_new_file.setText(self._tr("+ New File"))
-        self.btn_new_folder.setText(self._tr("+ Folder"))
+        self.btn_new_file.setText(self._tr("+ New note"))
+        self.btn_new_folder.setAccessibleName(self._tr("+ Folder"))
         self.btn_new_file.setToolTip(self._tr("New note in the selected folder (Ctrl+N)"))
         self.btn_new_folder.setToolTip(self._tr("New folder in the selected folder (Ctrl+Shift+N)"))
         self.new_folder_action.setText(self._tr("New Folder..."))
@@ -3455,9 +3601,10 @@ class MainWindow(QMainWindow):
 
         # --- Sidebar ---
         sidebar = QWidget()
+        sidebar.setObjectName("sidebar")
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(4, 4, 4, 0)
-        sidebar_layout.setSpacing(4)
+        sidebar_layout.setContentsMargins(10, 10, 10, 0)
+        sidebar_layout.setSpacing(8)
 
         self.sidebar_search = QLineEdit()
         self.sidebar_search.setPlaceholderText(self._tr("Search Files..."))
@@ -3467,9 +3614,13 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.sidebar_search)
 
         btn_row = QHBoxLayout()
-        self.btn_new_file = QPushButton("+ Ny fil")
+        btn_row.setSpacing(6)
+        self.btn_new_file = QPushButton("+ Ny anteckning")
+        self.btn_new_file.setObjectName("newNoteButton")
         self.btn_new_file.clicked.connect(self.new_file_in_workspace)
-        self.btn_new_folder = QPushButton("+ Mapp")
+        self.btn_new_folder = QPushButton()
+        self.btn_new_folder.setObjectName("newFolderButton")
+        self.btn_new_folder.setFixedWidth(36)
         self.btn_new_folder.clicked.connect(self.new_folder_in_workspace)
         self.btn_sort = QToolButton()
         self.btn_sort.setToolTip(self._tr("Sorting"))
@@ -3510,20 +3661,9 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.btn_sort)
         sidebar_layout.addLayout(btn_row)
 
-        folder_icon = icon_from_svg(FOLDER_ICON_SVG, size=20)
-        folder_pinned_icon = icon_from_svg(FOLDER_PINNED_ICON_SVG, size=20)
-        testlog_icon = icon_from_svg(TESTLOG_ICON_SVG, size=20)
-        testlog_pinned_icon = icon_from_svg(TESTLOG_PINNED_ICON_SVG, size=20)
         file_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
-        self.fs_model = WorkspaceFileSystemModel(
-            self.pinned_paths,
-            folder_icon=folder_icon,
-            folder_pinned_icon=folder_pinned_icon,
-            testlog_icon=testlog_icon,
-            testlog_pinned_icon=testlog_pinned_icon,
-            file_icon=file_icon,
-        )
-        self.fs_model.trash_icon = icon_from_svg(TRASH_ICON_SVG, size=20)
+        self.fs_model = WorkspaceFileSystemModel(self.pinned_paths, file_icon=file_icon)
+        self._apply_tree_icons()
         self.fs_model.translate = self._tr
         self.fs_proxy_model = WorkspaceSortProxyModel(self.fs_model, self.pinned_paths, self)
         self.fs_model.setNameFilters(["*.testlog"])
@@ -3533,7 +3673,8 @@ class MainWindow(QMainWindow):
 
         self.tree = QTreeView()
         self.tree.setModel(self.fs_proxy_model)
-        self.tree.setItemDelegate(WorkspaceTreeItemDelegate(self.tree))
+        self.tree_delegate = WorkspaceTreeItemDelegate(self.tree)
+        self.tree.setItemDelegate(self.tree_delegate)
         self.tree.setHeaderHidden(True)
         self.tree.setSortingEnabled(True)
         # File-manager selection: Shift+click/arrows for a range, Ctrl+click/Ctrl+Space to toggle.
@@ -3601,7 +3742,7 @@ class MainWindow(QMainWindow):
 
         self.outer_splitter.addWidget(sidebar)
         self.outer_splitter.addWidget(self.inner_splitter)
-        self.outer_splitter.setSizes([220, 1100])
+        self.outer_splitter.setSizes([260, 1100])
 
         self.setCentralWidget(self.outer_splitter)
         self.editor_count_label = QLabel()
@@ -3624,7 +3765,7 @@ class MainWindow(QMainWindow):
         self._save_failure_reported = False
         self.autosave_timer.timeout.connect(self.autosave)
 
-        # A keystroke fires textChanged and cursorPositionChanged; count once after both.
+        # A keystroke fires textChanged and cursorPositionChanged (and selectionChanged); count once after all.
         self.editor_counts_timer = QTimer(self)
         self.editor_counts_timer.setSingleShot(True)
         self.editor_counts_timer.setInterval(0)
@@ -3636,6 +3777,7 @@ class MainWindow(QMainWindow):
         self.editor.textChanged.connect(self._sync_status_from_editor)
         self.editor.textChanged.connect(self._sync_tags_from_editor)
         self.editor.cursorPositionChanged.connect(self.editor_counts_timer.start)
+        self.editor.selectionChanged.connect(self.editor_counts_timer.start)
         self.editor.verticalScrollBar().valueChanged.connect(self._sync_preview_scroll)
 
         self.sidebar_search_timer = QTimer(self)
@@ -5481,13 +5623,13 @@ class MainWindow(QMainWindow):
         selected_without_whitespace = "".join(selected_text.split())
 
         self.editor_count_label.setText(
-            self._tr(
-                "Editor Count: {with_ws} | No ws: {without_ws} | Selected: {sel_with_ws} | Selected no ws: {sel_without_ws}"
-            ).format(
-                with_ws=len(text),
-                without_ws=len(text_without_whitespace),
-                sel_with_ws=len(selected_text),
-                sel_without_ws=len(selected_without_whitespace),
+            format_editor_counts(
+                self._tr,
+                self.current_language,
+                len(text),
+                len(text_without_whitespace),
+                len(selected_text),
+                len(selected_without_whitespace),
             )
         )
 
@@ -5555,7 +5697,7 @@ class MainWindow(QMainWindow):
 
     def new_note_from_shortcut(self):
         # With a workspace open, Ctrl+N creates a named note in the selected folder like the
-        # "+ New File" button (saved and autosaved from the start), then puts the cursor in it.
+        # "+ New note" button (saved and autosaved from the start), then puts the cursor in it.
         if not self.workspace_dir:
             self.new_file()
             return
