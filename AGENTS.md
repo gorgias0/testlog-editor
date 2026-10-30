@@ -96,6 +96,14 @@ There is now a small unit test suite for extracted helper logic, but UI behavior
 - `note.md` starts with a front-matter block (`---` lines) holding `status:` and, optionally, `tags:` (lowercase, comma-separated single words). Helpers live in `testlog_utils.py` (`get/set_testlog_status`, `get/set_testlog_tags`); each setter keeps header lines it does not own, so add new keys the same way.
 - The sidebar reads both through `WorkspaceFileSystemModel` (`TESTLOG_STATUS_ROLE`, `TESTLOG_TAGS_ROLE`, cached per file modification time). Sidebar search terms starting with `#` filter by tag; folder matches are decided from the files on disk because `QFileSystemModel` loads folders lazily.
 
+## Look and Theme
+
+- Colours come from `MainWindow._theme_palette()` (one dictionary for light, one for dark); `_apply_theme()` builds the window style sheet from it and restyles the toolbar, tree icons, status dots and status pill. Add new colours as palette keys in both dictionaries rather than hard-coding them.
+- Tree and toolbar icons are SVG templates in `icons.py` with a `{stroke}` (and for pins `{accent}`) placeholder, rendered by `themed_icon()` and re-rendered by `_apply_theme()` so they follow the theme.
+- The note header above the editor holds `status_combo` (styled as a pill by `_style_status_pill`) and `tags_edit` (behind tag chips in `tags_stack`); `_refresh_note_header()` follows `windowTitleChanged`, so code that changes the open file should keep updating the window title.
+- Do not put style sheet margins on container widgets that lay out children: Qt moves the painted background but not the children (this made the Edit / Split / Preview switch look broken). Use a spacer widget or layout margins instead.
+- Check UI changes in both themes. Windows renders differently from Linux; the Windows Python in the Windows checkout can render the window with the native style without showing it (`Qt.WidgetAttribute.WA_DontShowOnScreen`), with `QSettings` redirected to a temporary `.ini` file so the real settings in the registry are untouched.
+
 ## Tree Actions
 
 - The file tree uses extended selection. `MainWindow._selected_tree_paths()` returns the visible selected items in on-screen order; `trash.top_level_paths` drops items inside a selected folder.

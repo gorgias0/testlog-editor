@@ -7,14 +7,16 @@ A local-first desktop Markdown editor for `.testlog` files, built with PySide6.
 - Workspace-first flow with a searchable file tree, pinned files, and last-workspace restore
 - Keyboard navigation in the sidebar: Ctrl+L focuses the file search (↓ moves into the list, Enter opens the first match), Ctrl+0 or Alt+← focuses the file tree (arrows move and show the highlighted note after a short pause, Enter opens it in the editor or toggles a folder, Esc or Alt+→ returns to the editor), F2 renames, Delete moves to Trash, and the Menu key or Shift+F10 opens the item's context menu; Ctrl+N creates a note and Ctrl+Shift+N a folder in the selected folder
 - Multi-select in the file tree (Shift+click or Shift+arrows for a range, Ctrl+click or Ctrl+Space to add or remove one, Ctrl+A for all): set status, add or remove tags, pin, move, archive or delete the whole selection from the right-click menu or the Delete key
-- Status (todo/doing/done) and tags per note; type `#tag` in the sidebar search to show only notes with that tag, across folders
+- Status (todo/doing/done) and tags per note, shown in a header above the note as a coloured status pill and tag chips (click a chip or "+ tag" to edit); type `#tag` in the sidebar search to show only notes with that tag, across folders
+- Sidebar sorting by name, last modified, created, or status (Doing, then Todo, then Done, newest first within each), so active notes stay at the top of each folder
 - Deleted notes and folders go to a Trash folder (Papperskorg in Swedish) at the bottom of the sidebar, where they can be restored; anything left untouched in Trash for 30 days is removed when the workspace is opened
 - Text tools for exploratory testing like; generate test data, lorem ipsum, count chars, pretty-print JSON/HTML, convert to Base64 etc.
-- Split editor and live preview with clickable task list checkboxes
+- Split editor and live preview with clickable task list checkboxes; an Edit / Split / Preview switch in the toolbar (Ctrl+E or F11 toggles between editor and preview, Ctrl+Shift+E splits)
+- Compact icon toolbar for bold, italic, underline, headings, lists, checklists and horizontal rules, with Text Tool and Diff on the right
 - Robust autosave for saved files, plus save/discard prompts when leaving untitled changes behind
 - Paste screenshots and images directly into a note as embedded markdown assets
 - PDF export that carries embedded images along
-- Light/dark preview themes, editor font sizing, and Swedish/English UI support
+- Light and dark themes for the whole window (View menu), editor font sizing, and Swedish/English UI support
 
 ## Setup
 

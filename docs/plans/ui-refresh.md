@@ -22,9 +22,11 @@ How to see it working: run `python main.py`, open a workspace, open a note. The 
 - [x] (2026-10-30) Milestone 2: icon-only formatting buttons with themed `{stroke}` icons (`_apply_toolbar_icons`); one "Heading" button whose menu lists Heading 1–4 with their shortcuts; new checklist button (`- [ ] `); Text Tool and Diff on the right as outlined icon-plus-text buttons; Edit / Split / Preview switch (`set_view`, `_sync_view_switch`) replacing `toggle_btn`, `_update_toggle_icon`, `_preview_toggle_button_stylesheet` and the two old toggle SVGs; six unused translation keys removed. 227 passed. Scripted check of every toolbar action and of the switch against Ctrl+E, View > Split View and a restart (see `Artifacts and Notes`).
 - [x] (2026-10-30) Milestone 2 committed; Windows build installed for the user.
 - [x] (2026-10-30) Milestone 3: note header bar above editor and preview (`note_header`, folder and name labels); `status_combo` moved there and styled as a pill per status and theme (`_style_status_pill`, `STATUS_PILL_COLORS`, a coloured dot icon per item); `tags_edit` moved there behind a `QStackedWidget` with tag chips and a "+ tag" button (`_refresh_tag_chips`, `_begin_tag_edit`, `_end_tag_edit`); `_refresh_note_header` runs on `windowTitleChanged` and after moves and deletes of the open note; focus order sidebar → status → tags → editor; 4 Swedish strings. 227 passed. Scripted acceptance run (see `Artifacts and Notes`).
-- [ ] Milestone 3 commit (waiting for the user's approval) and Windows build for the user.
-- [ ] Milestone 4 (optional, prototyping): setting to hide the front-matter lines in the editor.
-- [ ] Milestone 5: documentation (`README.md`, `AGENTS.md`), full test run, Windows build handed to the user, retrospective.
+- [x] (2026-10-30) Two fixes from the user's check on Windows: the Edit / Split / Preview switch's style sheet margin replaced by a spacer widget, and more padding for the menu bar and menus (see `Surprises & Discoveries`).
+- [x] (2026-10-30) Milestone 3 committed as `8503508` (with both fixes); Windows build installed for the user.
+- [x] (2026-10-30) Milestone 4 skipped by the user's choice (see `Decision Log`).
+- [x] (2026-10-30) Milestone 5: `README.md` Highlights (header bar, status sort, view switch, icon toolbar, whole-window themes) and a new "Look and Theme" section in `AGENTS.md`; full test run 227 passed; retrospective written.
+- [ ] Milestone 5 commit (waiting for the user's approval) and final Windows build.
 
 
 ## Surprises & Discoveries
@@ -68,6 +70,9 @@ How to see it working: run `python main.py`, open a workspace, open a note. The 
 - Decision: the header refreshes from Qt's `windowTitleChanged` signal plus two explicit calls, instead of a call at each of the ten places that change `current_file`.
   Rationale: every place that opens, renames, creates or closes a note already updates the window title; only a move (same name, so same title) and a delete of the open note need an explicit refresh (`_update_tracked_paths`, `_remove_tracked_paths`).
   Date/Author: 2026-10-30 / Claude.
+- Decision: milestone 4 (hiding the front-matter lines) is not done.
+  Rationale: chosen by the user after a recap. The header bar already shows and edits status and tags; hiding text blocks in the editor touches select-all, copy, undo, find and smart Enter for a cosmetic gain, and the visible lines show what is saved in the file. It can be its own small plan later.
+  Date/Author: 2026-10-30 / Daniel Lindkvist.
 - Decision: each milestone is committed separately, only after the user approves the commit; nothing is pushed without approval.
   Rationale: the user's standing rules (no commit or push without being told each time).
   Date/Author: 2026-10-30 / Daniel Lindkvist.
@@ -75,7 +80,13 @@ How to see it working: run `python main.py`, open a workspace, open a note. The 
 
 ## Outcomes & Retrospective
 
-(Not started.)
+Completed 2026-10-30. The main window now follows the agreed "clean native" mockup in both themes: a sidebar on its own background with flat themed icons, taller rows and a clear selection; a compact icon toolbar with one Heading menu, a checklist button and an Edit / Split / Preview switch; a note header with the folder, the note name, a coloured status pill and tag chips; an unboxed editor with more room; a short status bar; and roomier menus. Storage and behaviour are unchanged: the status drop-down and tags field were moved and restyled rather than replaced, so every existing path that reads or writes them still works. Milestone 4 (hiding the front-matter lines) was left out by choice.
+
+Evidence: 227 tests pass on Linux (3 new for the count text). On Windows the same three `resolve_preview_image_path` tests fail as before this plan (they expect `/` separators and get `\`); nothing else fails. Each milestone has screenshots in both themes and a scripted check recorded in `Artifacts and Notes`, and the user checked each build on Windows.
+
+Lessons. Offscreen Linux screenshots missed two things the user saw at once on Windows: a style sheet margin on a container (only visible when its first button was selected) and cramped menus. Rendering with the Windows Python and the native style (window marked `WA_DontShowOnScreen`, settings redirected to a temporary `.ini`) reproduced the problem exactly and is now described in `AGENTS.md`; use it before handing over UI changes. Check every state of a control (each button selected), not only the default.
+
+Left for later: the old glossy SVG constants in `icons.py` (`FOLDER_ICON_SVG`, `TESTLOG_ICON_SVG`, `TRASH_ICON_SVG` and the pinned variants) are no longer used and can be removed; hiding the front-matter lines (milestone 4) if wanted.
 
 
 ## Context and Orientation
