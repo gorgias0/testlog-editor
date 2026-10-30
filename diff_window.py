@@ -252,13 +252,35 @@ class DiffWindow(QDialog):
                 font-weight: 600;
             }}
             QPushButton, QToolButton {{
-                background: {palette["chrome_bg"]};
+                background: {palette["control_bg"]};
                 color: {palette["text"]};
-                border: 1px solid {palette["panel_border"]};
-                padding: 4px 10px;
+                border: 1px solid {palette["control_border"]};
+                border-radius: 6px;
+                min-height: 26px;
+                max-height: 26px;
+                padding: 0 10px;
             }}
             QPushButton:hover, QToolButton:hover {{
                 background: {palette["chrome_hover"]};
+            }}
+            QToolButton {{
+                padding-right: 22px;
+            }}
+            QCheckBox::indicator {{
+                width: 14px;
+                height: 14px;
+                border: 1px solid {palette["control_border"]};
+                border-radius: 4px;
+                background: {palette["control_bg"]};
+            }}
+            QCheckBox::indicator:checked {{
+                background: {palette["accent"]};
+                border-color: {palette["accent"]};
+            }}
+            QToolButton::menu-indicator {{
+                subcontrol-origin: padding;
+                subcontrol-position: right center;
+                right: 6px;
             }}
             QPlainTextEdit {{
                 background: {palette["panel_bg"]};
@@ -273,7 +295,7 @@ class DiffWindow(QDialog):
             editor.set_chrome_colors(
                 palette["chrome_bg"],
                 palette["muted_text"],
-                "#313843" if palette["window_bg"] == "#1f232a" else "#eef6ff",
+                palette["current_line_bg"],
             )
             editor.line_number_area.update()
             editor.viewport().update()

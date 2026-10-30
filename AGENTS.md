@@ -99,6 +99,7 @@ There is now a small unit test suite for extracted helper logic, but UI behavior
 ## Look and Theme
 
 - Colours come from `MainWindow._theme_palette()` (one dictionary for light, one for dark); `_apply_theme()` builds the window style sheet from it and restyles the toolbar, tree icons, status dots and status pill. Add new colours as palette keys in both dictionaries rather than hard-coding them.
+- The Text Tool and Diff windows style themselves in their own `apply_theme(palette)`, which `_apply_theme()` calls when the theme changes; they use the same palette keys.
 - Tree and toolbar icons are SVG templates in `icons.py` with a `{stroke}` (and for pins `{accent}`) placeholder, rendered by `themed_icon()` and re-rendered by `_apply_theme()` so they follow the theme.
 - The note header above the editor holds `status_combo` (styled as a pill by `_style_status_pill`) and `tags_edit` (behind tag chips in `tags_stack`); `_refresh_note_header()` follows `windowTitleChanged`, so code that changes the open file should keep updating the window title.
 - Do not put style sheet margins on container widgets that lay out children: Qt moves the painted background but not the children (this made the Edit / Split / Preview switch look broken). Use a spacer widget or layout margins instead.

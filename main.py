@@ -2366,6 +2366,7 @@ class MainWindow(QMainWindow):
                 "status_doing": "#57ab5a",
                 "status_todo": "#c69026",
                 "status_done": "#768390",
+                "current_line_bg": "#2d333b",
             }
         return {
             "window_bg": "#f6f7f9",
@@ -2402,6 +2403,7 @@ class MainWindow(QMainWindow):
             "status_doing": "#1a7f37",
             "status_todo": "#bf8700",
             "status_done": "#8c959f",
+            "current_line_bg": "#eef6ff",
         }
 
     def _editor_scrollbar_stylesheet(self, theme_mode=None):
@@ -2935,6 +2937,8 @@ class MainWindow(QMainWindow):
             self._apply_editor_stylesheet()
         if self.diff_window is not None:
             self.diff_window.apply_theme(palette)
+        if getattr(self, "text_tool_dialog", None) is not None:
+            self.text_tool_dialog.apply_theme(palette)
         if hasattr(self, "preview"):
             self.preview.setStyleSheet(
                 f"background: {palette['panel_bg']}; border: none; border-left: 1px solid {palette['panel_border']};"
@@ -4867,6 +4871,7 @@ class MainWindow(QMainWindow):
     def open_text_tool(self):
         if not hasattr(self, "text_tool_dialog") or self.text_tool_dialog is None:
             self.text_tool_dialog = TextToolDialog(self._tr, self)
+            self.text_tool_dialog.apply_theme(self._theme_palette())
         self.text_tool_dialog.show()
         self.text_tool_dialog.raise_()
         self.text_tool_dialog.activateWindow()

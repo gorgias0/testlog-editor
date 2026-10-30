@@ -304,7 +304,7 @@ class TextToolDialog(QDialog):
         self._tr = translate
         self.settings = QSettings("TestLog Editor", "TestLog Editor")
         self._faker_by_locale = {}
-        self.resize(700, 500)
+        self.resize(860, 500)
         saved_size = self.settings.value("text_tool_size")
         if saved_size:
             self.resize(saved_size)
@@ -410,6 +410,7 @@ class TextToolDialog(QDialog):
             )
         self.generate_lorem_button.setMenu(self.generate_lorem_menu)
         self.generate_lorem_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.generate_lorem_button.setObjectName("menuToolButton")
         self.counter_string_action = QAction(self)
         self.counter_string_action.triggered.connect(self._show_counter_string_dialog)
         self.uuid_action = QAction(self)
@@ -426,6 +427,7 @@ class TextToolDialog(QDialog):
             self.testdata_locale_actions[locale_code] = action
         self.testdata_button.setMenu(self.testdata_menu)
         self.testdata_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.testdata_button.setObjectName("menuToolButton")
         self.special_characters_action = QAction(self)
         self.special_characters_action.triggered.connect(self._insert_special_character_samples)
         self.copy_all_action = QAction(self)
@@ -1142,7 +1144,56 @@ class TextToolDialog(QDialog):
             return
         super().keyPressEvent(event)
 
-    def closeEvent(self, event):
+    def apply_theme(self, palette):
+        self.toolbar.setStyleSheet(
+            f"""
+            QToolBar {{
+                spacing: 2px;
+                padding: 4px 0;
+                background: transparent;
+                border: none;
+            }}
+            QToolButton {{
+                min-height: 28px;
+                max-height: 28px;
+                padding: 0 8px;
+                border: none;
+                border-radius: 6px;
+                background: transparent;
+                color: {palette["text"]};
+            }}
+            QToolButton:hover {{
+                background: {palette["chrome_hover"]};
+            }}
+            QToolButton#menuToolButton {{
+                padding-right: 22px;
+            }}
+            QToolButton::menu-button {{
+                border: none;
+                width: 18px;
+            }}
+            QToolButton::menu-button:hover {{
+                background: {palette["chrome_hover"]};
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }}
+            QToolBar::separator {{
+                background: {palette["panel_border"]};
+                width: 1px;
+                margin: 6px 6px;
+            }}
+            """
+        )
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Start in the text, not the menu bar: the menu bar swallows Escape.
+        text_area = self._current_text_area()
+        if text_area is not None:
+            text_area.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+
+    def hideEvent(self, event):
+        # Escape hides the dialog through reject() without a close event, so save here.
         self.settings.setValue("text_tool_size", self.size())
         self._save_tabs()
-        super().closeEvent(event)
+        super().hideEvent(event)
