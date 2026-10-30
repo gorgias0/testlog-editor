@@ -27,9 +27,10 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QFormLayout, QCheckBox,
     QListWidget, QListWidgetItem, QGraphicsDropShadowEffect,
     QStyledItemDelegate, QStyleOptionViewItem, QCompleter, QAbstractItemView, QButtonGroup,
+    QStackedWidget,
 )
 from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, Signal, QItemSelectionModel, QSize, QPoint, QFileInfo, QRect, QStringListModel
-from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QTextBlockFormat, QIntValidator, QShortcut, QColor, QTextCharFormat, QSyntaxHighlighter, QDesktopServices, QPainter, QPalette, QIcon
+from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QTextBlockFormat, QIntValidator, QShortcut, QColor, QTextCharFormat, QSyntaxHighlighter, QDesktopServices, QPainter, QPalette, QIcon, QPixmap
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineContextMenuRequest, QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebChannel import QWebChannel
@@ -2297,6 +2298,8 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geometry)
         self._setup_menu()
         self._setup_toolbar()
+        # Every change of the open file also changes the window title, so follow that.
+        self.windowTitleChanged.connect(lambda _title: self._refresh_note_header())
         self.view_mode = self._load_view_mode()
         self.action_split_view.setChecked(self.view_mode == ViewMode.SPLIT)
         self.set_split_mode(self.view_mode == ViewMode.SPLIT)
@@ -2516,7 +2519,6 @@ class MainWindow(QMainWindow):
             QWidget#viewSwitch {{
                 background: {palette["chrome_hover"]};
                 border-radius: 7px;
-                margin-left: 8px;
             }}
             QWidget#viewSwitch QToolButton {{
                 min-width: 0;
@@ -2762,6 +2764,34 @@ class MainWindow(QMainWindow):
             QMenu::item:selected, QMenuBar::item:selected {{
                 background: {palette["chrome_hover"]};
             }}
+            QMenuBar {{
+                padding: 2px 6px;
+            }}
+            QMenuBar::item {{
+                padding: 5px 10px;
+                border-radius: 5px;
+            }}
+            QMenu {{
+                padding: 6px;
+                border: 1px solid {palette["panel_border"]};
+            }}
+            QMenu::item {{
+                padding: 6px 28px 6px 28px;
+                border-radius: 5px;
+            }}
+            QMenu::item:disabled {{
+                color: {palette["muted_text"]};
+            }}
+            QMenu::indicator {{
+                width: 14px;
+                height: 14px;
+                left: 8px;
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: {palette["panel_border"]};
+                margin: 5px 8px;
+            }}
             QTreeView, QListWidget, QListView, QLineEdit, QTextEdit, QPlainTextEdit {{
                 background: {palette["panel_bg"]};
                 color: {palette["text"]};
@@ -2800,6 +2830,44 @@ class MainWindow(QMainWindow):
             QStatusBar QLabel {{
                 color: {palette["muted_text"]};
                 padding: 0 6px;
+            }}
+            QWidget#noteHeader {{
+                background: {palette["panel_bg"]};
+                border-bottom: 1px solid {palette["panel_border"]};
+            }}
+            QLabel#noteHeaderFolder {{
+                color: {palette["muted_text"]};
+                font-size: 11px;
+            }}
+            QLabel#noteHeaderTitle {{
+                color: {palette["text"]};
+                font-size: 15px;
+                font-weight: 600;
+            }}
+            QWidget#noteHeader QToolButton#tagChip {{
+                background: {palette["chip_bg"]};
+                color: {palette["chip_text"]};
+                border: 1px solid {palette["chip_bg"]};
+                border-radius: 11px;
+                padding: 2px 9px;
+                font-size: 12px;
+            }}
+            QWidget#noteHeader QToolButton#tagAddButton {{
+                background: transparent;
+                color: {palette["muted_text"]};
+                border: 1px dashed {palette["control_border"]};
+                border-radius: 11px;
+                padding: 2px 8px;
+                font-size: 12px;
+            }}
+            QWidget#noteHeader QToolButton#tagChip:hover, QWidget#noteHeader QToolButton#tagAddButton:hover {{
+                background: {palette["chrome_hover"]};
+            }}
+            QWidget#noteHeader QLineEdit {{
+                background: {palette["control_bg"]};
+                border: 1px solid {palette["control_border"]};
+                border-radius: 6px;
+                padding: 3px 8px;
             }}
             QWidget#sidebar {{
                 background: {palette["sidebar_bg"]};
@@ -2874,6 +2942,7 @@ class MainWindow(QMainWindow):
             self.preview.page().setBackgroundColor(QColor(palette["panel_bg"]))
         if hasattr(self, "toolbar_bold_action"):
             self._apply_toolbar_icons()
+        self._style_status_pill()
         if hasattr(self, "toolbar"):
             self.toolbar.setStyleSheet(self._toolbar_stylesheet())
         if hasattr(self, "editor_highlighter"):
@@ -3342,26 +3411,38 @@ class MainWindow(QMainWindow):
         self.toolbar_hr_action.triggered.connect(self._insert_horizontal_rule)
         self.toolbar.addAction(self.toolbar_hr_action)
 
-        self.toolbar.addSeparator()
-
+        # The status drop-down and tags field live in the note header, styled as a pill and chips.
         self.status_combo = QComboBox()
+        self.status_combo.setObjectName("statusPill")
         self.status_combo.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-        self.status_combo.setFixedWidth(120)
+        self.status_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         for status in TESTLOG_STATUS_OPTIONS:
             self.status_combo.addItem(TESTLOG_STATUS_LABELS[status], status)
         self.status_combo.currentIndexChanged.connect(self._on_status_combo_changed)
-        self.toolbar.addWidget(self.status_combo)
+        self.status_combo.currentIndexChanged.connect(lambda _index: self._style_status_pill())
+        self.note_header_layout.addWidget(self.status_combo, 0, Qt.AlignmentFlag.AlignVCenter)
         self._set_status_combo(self.current_status)
 
         self.tags_edit = TagLineEdit()
-        self.tags_edit.setFixedWidth(180)
         self.tags_completer = TagCompleter(self.tags_edit)
         self.tags_completer.setModel(QStringListModel(self.tags_completer))
         self.tags_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.tags_edit.setCompleter(self.tags_completer)
         self.tags_edit.focused.connect(self._refresh_tag_suggestions)
         self.tags_edit.editingFinished.connect(self._on_tags_edit_finished)
-        self.toolbar.addWidget(self.tags_edit)
+        self.tags_edit.editingFinished.connect(self._end_tag_edit)
+        self.tags_chips = QWidget()
+        self.tags_chips_layout = QHBoxLayout(self.tags_chips)
+        self.tags_chips_layout.setContentsMargins(0, 0, 0, 0)
+        self.tags_chips_layout.setSpacing(6)
+        self.tags_add_button = QToolButton()
+        self.tags_add_button.setObjectName("tagAddButton")
+        self.tags_add_button.clicked.connect(self._begin_tag_edit)
+        self.tags_stack = QStackedWidget()
+        self.tags_stack.addWidget(self.tags_chips)
+        self.tags_stack.addWidget(self.tags_edit)
+        self.note_header_layout.addWidget(self.tags_stack, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._refresh_tag_chips()
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -3399,6 +3480,11 @@ class MainWindow(QMainWindow):
             self.view_switch_group.addButton(button)
             view_switch_layout.addWidget(button)
             self.view_switch_buttons[view_name] = button
+        # The gap before the switch is a real widget: a style sheet margin on the switch would
+        # move its painted background but not its buttons, so the first button stuck out.
+        view_switch_gap = QWidget()
+        view_switch_gap.setFixedWidth(8)
+        self.toolbar.addWidget(view_switch_gap)
         self.toolbar.addWidget(self.view_switch)
 
         self.editor_preview_shortcut = QShortcut(QKeySequence("Ctrl+E"), self)
@@ -3435,6 +3521,119 @@ class MainWindow(QMainWindow):
         self.status_combo.blockSignals(True)
         self.status_combo.setCurrentIndex(combo_index)
         self.status_combo.blockSignals(False)
+        self._style_status_pill()
+
+    # Pill colours per theme and status: background, border, text.
+    STATUS_PILL_COLORS = {
+        "light": {
+            "doing": ("#e8f6ec", "#b7e1c4", "#116329"),
+            "todo": ("#fff5d6", "#ecd28a", "#7a5400"),
+            "done": ("#eef1f4", "#d0d7de", "#57606a"),
+        },
+        "dark": {
+            "doing": ("#1d3325", "#2f5d37", "#7ee2a8"),
+            "todo": ("#3a2f12", "#6b5520", "#e3b341"),
+            "done": ("#2d333b", "#444c56", "#adbac7"),
+        },
+    }
+
+    def _style_status_pill(self):
+        if not hasattr(self, "status_combo"):
+            return
+        palette = self._theme_palette()
+        status = self.status_combo.currentData() or DEFAULT_TESTLOG_STATUS
+        theme = "dark" if self.theme_mode == "dark" else "light"
+        background, border, text = self.STATUS_PILL_COLORS[theme][status]
+        for index in range(self.status_combo.count()):
+            item_status = self.status_combo.itemData(index)
+            self.status_combo.setItemIcon(index, self._status_dot_icon(palette[f"status_{item_status}"]))
+        self.status_combo.setStyleSheet(
+            f"""
+            QComboBox#statusPill {{
+                background: {background};
+                border: 1px solid {border};
+                border-radius: 13px;
+                color: {text};
+                font-weight: 600;
+                min-height: 22px;
+                padding: 1px 8px 1px 10px;
+            }}
+            QComboBox#statusPill::drop-down {{
+                border: none;
+                width: 16px;
+            }}
+            QComboBox#statusPill QAbstractItemView {{
+                background: {palette["panel_bg"]};
+                color: {palette["text"]};
+                selection-background-color: {palette["row_selected_bg"]};
+                selection-color: {palette["row_selected_text"]};
+            }}
+            """
+        )
+
+    @staticmethod
+    def _status_dot_icon(color):
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        painter.drawEllipse(4, 4, 8, 8)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _refresh_tag_chips(self):
+        if not hasattr(self, "tags_chips_layout"):
+            return
+        while self.tags_chips_layout.count():
+            widget = self.tags_chips_layout.takeAt(0).widget()
+            if widget is not None and widget is not self.tags_add_button:
+                widget.deleteLater()
+        for tag in normalize_testlog_tags(self.tags_edit.text()):
+            chip = QToolButton()
+            chip.setObjectName("tagChip")
+            chip.setText(tag)
+            chip.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            chip.setToolTip(self._tr("Tags"))
+            chip.clicked.connect(self._begin_tag_edit)
+            self.tags_chips_layout.addWidget(chip)
+        self.tags_chips_layout.addWidget(self.tags_add_button)
+
+    def _begin_tag_edit(self):
+        self.tags_stack.setMinimumWidth(max(self.tags_chips.width(), 220))
+        self.tags_stack.setCurrentWidget(self.tags_edit)
+        self.tags_edit.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.tags_edit.end(False)
+
+    def _end_tag_edit(self):
+        # Runs after _on_tags_edit_finished (connected first) has written the tags to the note.
+        if self.tags_stack.currentWidget() is self.tags_edit:
+            self.tags_stack.setCurrentWidget(self.tags_chips)
+            self.tags_stack.setMinimumWidth(0)
+        self._refresh_tag_chips()
+
+    def _refresh_note_header(self):
+        if not hasattr(self, "note_header_title"):
+            return
+        if not self.current_file:
+            self.note_header_folder.setText("")
+            self.note_header_title.setText(self._tr("Untitled"))
+            return
+        folder = os.path.dirname(os.path.abspath(self.current_file))
+        workspace_abs = os.path.abspath(self.workspace_dir) if self.workspace_dir else ""
+        in_workspace = bool(workspace_abs) and (
+            os.path.normcase(folder) == os.path.normcase(workspace_abs)
+            or os.path.normcase(folder).startswith(os.path.normcase(workspace_abs) + os.sep)
+        )
+        if in_workspace:
+            relative = os.path.relpath(folder, workspace_abs)
+            folder_text = "" if relative == "." else relative.replace(os.sep, " / ")
+        else:
+            folder_text = folder
+        self.note_header_folder.setText(folder_text)
+        self.note_header_folder.setVisible(bool(folder_text))
+        self.note_header_title.setText(Path(self.current_file).stem)
 
     def _sync_status_from_editor(self):
         status = get_testlog_status(self.editor.toPlainText())
@@ -3490,6 +3689,7 @@ class MainWindow(QMainWindow):
             self.tags_edit.blockSignals(True)
             self.tags_edit.setText(text)
             self.tags_edit.blockSignals(False)
+            self._refresh_tag_chips()
 
     def _refresh_tag_suggestions(self):
         self.tags_completer.model().setStringList(self._known_workspace_tags())
@@ -3637,6 +3837,11 @@ class MainWindow(QMainWindow):
             status = self.status_combo.itemData(index)
             self.status_combo.setItemText(index, self._tr(TESTLOG_STATUS_LABELS[status]))
         self.status_combo.setToolTip(self._tr("Status"))
+        self.tags_add_button.setText(self._tr("+ tag"))
+        self.tags_add_button.setToolTip(self._tr("Add or edit tags"))
+        self.tags_edit.setPlaceholderText(self._tr("Tags, separated by commas"))
+        self._refresh_tag_chips()
+        self._refresh_note_header()
         view_labels = {
             "edit": (self._tr("Edit"), self._tr("Editor only (Ctrl+E or F11 switches)")),
             "split": (self._tr("Split"), self._tr("Editor and preview side by side (Ctrl+Shift+E)")),
@@ -3816,7 +4021,32 @@ class MainWindow(QMainWindow):
         self.inner_splitter.setSizes([550, 550])
 
         self.outer_splitter.addWidget(sidebar)
-        self.outer_splitter.addWidget(self.inner_splitter)
+        # The note header (folder, name, status, tags) sits above both the editor and the preview.
+        self.note_header = QWidget()
+        self.note_header.setObjectName("noteHeader")
+        self.note_header_layout = QHBoxLayout(self.note_header)
+        self.note_header_layout.setContentsMargins(24, 8, 16, 8)
+        self.note_header_layout.setSpacing(10)
+        note_header_names = QVBoxLayout()
+        note_header_names.setSpacing(0)
+        self.note_header_folder = QLabel()
+        self.note_header_folder.setObjectName("noteHeaderFolder")
+        self.note_header_title = QLabel()
+        self.note_header_title.setObjectName("noteHeaderTitle")
+        self.note_header_title.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # A long name must not force the window wider; the labels may be cut off instead.
+        for label in (self.note_header_folder, self.note_header_title):
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        note_header_names.addWidget(self.note_header_folder)
+        note_header_names.addWidget(self.note_header_title)
+        self.note_header_layout.addLayout(note_header_names, 1)
+        main_column = QWidget()
+        main_column_layout = QVBoxLayout(main_column)
+        main_column_layout.setContentsMargins(0, 0, 0, 0)
+        main_column_layout.setSpacing(0)
+        main_column_layout.addWidget(self.note_header)
+        main_column_layout.addWidget(self.inner_splitter, 1)
+        self.outer_splitter.addWidget(main_column)
         self.outer_splitter.setSizes([260, 1100])
 
         self.setCentralWidget(self.outer_splitter)
@@ -3901,8 +4131,6 @@ class MainWindow(QMainWindow):
             self.toolbar.widgetForAction(self.toolbar_numbered_action),
             self.toolbar.widgetForAction(self.toolbar_checklist_action),
             self.toolbar.widgetForAction(self.toolbar_hr_action),
-            self.status_combo,
-            self.tags_edit,
             self.toolbar.widgetForAction(self.toolbar_text_tool_action),
             self.toolbar.widgetForAction(self.toolbar_diff_action),
             *self.view_switch_buttons.values(),
@@ -3912,7 +4140,12 @@ class MainWindow(QMainWindow):
             widget.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         # A text field must also take focus from a click.
         self.tags_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        focus_chain.extend([self.sidebar_search, self.btn_new_file, self.btn_new_folder, self.btn_sort, self.tree, self.editor, self.preview])
+        self.status_combo.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.tags_add_button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        focus_chain.extend([
+            self.sidebar_search, self.btn_new_file, self.btn_new_folder, self.btn_sort, self.tree,
+            self.status_combo, self.tags_add_button, self.tags_edit, self.editor, self.preview,
+        ])
         for current_widget, next_widget in zip(focus_chain, focus_chain[1:]):
             self.setTabOrder(current_widget, next_widget)
 
@@ -5498,6 +5731,8 @@ class MainWindow(QMainWindow):
                 suffix = current_abs[len(old_abs):]
                 self.current_file = new_abs + suffix
                 self.setWindowTitle(self._window_title(os.path.basename(self.current_file)))
+                # A move keeps the name (and so the window title), but the folder changes.
+                self._refresh_note_header()
 
     def _remove_tracked_paths(self, deleted_path):
         deleted_abs = os.path.abspath(deleted_path)
@@ -5513,6 +5748,7 @@ class MainWindow(QMainWindow):
             current_abs = os.path.abspath(self.current_file)
             if current_abs == deleted_abs or current_abs.startswith(deleted_abs + os.sep):
                 self.current_file = None
+                self._refresh_note_header()
 
     def new_file_in_workspace(self):
         if not self.workspace_dir:

@@ -20,8 +20,9 @@ How to see it working: run `python main.py`, open a workspace, open a note. The 
 - [x] (2026-10-30) Milestone 1: new palette keys and values (light and dark); sidebar on its own background with rounded controls, an accent "+ New note" button and an icon-only new-folder button; 28-pixel tree rows with a full-row highlight and no dotted focus frame; flat `{stroke}` line icons (`themed_icon`) re-rendered on theme change; status dots themed in the tree and the recent-files switcher; editor without a box border and with left/top padding; status bar "N characters · N without spaces" plus the selected counts while text is selected (`format_editor_counts`, 3 tests). 227 passed. Screenshots in both themes and a scripted check of live theme switching and the counts (see `Artifacts and Notes`).
 - [x] (2026-10-30) Milestone 1 committed; Windows build installed for the user.
 - [x] (2026-10-30) Milestone 2: icon-only formatting buttons with themed `{stroke}` icons (`_apply_toolbar_icons`); one "Heading" button whose menu lists Heading 1–4 with their shortcuts; new checklist button (`- [ ] `); Text Tool and Diff on the right as outlined icon-plus-text buttons; Edit / Split / Preview switch (`set_view`, `_sync_view_switch`) replacing `toggle_btn`, `_update_toggle_icon`, `_preview_toggle_button_stylesheet` and the two old toggle SVGs; six unused translation keys removed. 227 passed. Scripted check of every toolbar action and of the switch against Ctrl+E, View > Split View and a restart (see `Artifacts and Notes`).
-- [ ] Milestone 2 commit (waiting for the user's approval) and Windows build for the user.
-- [ ] Milestone 3: note header bar (folder, name, status pill, tag chips).
+- [x] (2026-10-30) Milestone 2 committed; Windows build installed for the user.
+- [x] (2026-10-30) Milestone 3: note header bar above editor and preview (`note_header`, folder and name labels); `status_combo` moved there and styled as a pill per status and theme (`_style_status_pill`, `STATUS_PILL_COLORS`, a coloured dot icon per item); `tags_edit` moved there behind a `QStackedWidget` with tag chips and a "+ tag" button (`_refresh_tag_chips`, `_begin_tag_edit`, `_end_tag_edit`); `_refresh_note_header` runs on `windowTitleChanged` and after moves and deletes of the open note; focus order sidebar → status → tags → editor; 4 Swedish strings. 227 passed. Scripted acceptance run (see `Artifacts and Notes`).
+- [ ] Milestone 3 commit (waiting for the user's approval) and Windows build for the user.
 - [ ] Milestone 4 (optional, prototyping): setting to hide the front-matter lines in the editor.
 - [ ] Milestone 5: documentation (`README.md`, `AGENTS.md`), full test run, Windows build handed to the user, retrospective.
 
@@ -36,6 +37,11 @@ How to see it working: run `python main.py`, open a workspace, open a note. The 
   Evidence: scripted check printed "… · 12 selected (10 without spaces)" after `clearSelection()` before the fix and the totals only after it.
 - Observation: `QWidget.isVisible()` is false for every widget until the window is shown, so code that decides the current view during start-up must use `isHidden()`; `set_view` and `_sync_view_switch` do. (`toggle_editor_preview` still uses `isVisible()`, which is fine because it only runs after the window is shown.)
 - Observation: scripted checks that close the window with an untitled note containing text block on the "Save changes before leaving this file?" message box; replace `QMessageBox.question` (and its siblings) in the script with a function that returns `Discard`, and run Python with `-u` and `timeout` so output is not lost if something blocks.
+- Observation (found by the user on Windows, 2026-10-30): the Edit / Split / Preview switch had `margin-left: 8px` in its style sheet. On a container widget Qt applies a style sheet margin to the painted background only, not to the child buttons' layout, so the selected first button ("Edit"/"Redigera") stuck out 8 pixels past the left edge of the pill. It only showed when Edit was selected; the screenshots so far had Split selected. The gap is now a fixed 8-pixel `QWidget` added to the toolbar before the switch. Do not put style sheet margins on containers that lay out children.
+  Evidence: render with the Windows Python, native `windows11` style, Swedish, dark theme, view mode single: before, the selected button's box extends left of the pill; after, it sits inside it (renders made with `WA_DontShowOnScreen` so nothing appeared on the user's desktop, and settings redirected to a temporary .ini file).
+- Observation (user feedback, 2026-10-30): the menu bar and drop-down menus felt cramped next to the roomier toolbar and sidebar. `_apply_theme` now pads `QMenuBar::item` and `QMenu::item`, rounds their highlights, keeps a left column for check marks (`QMenu::indicator`) and draws thin separators; checked on Windows with the native style in both themes.
+- Observation: Qt only drew rounded corners on the tag chips (`QToolButton` with a style sheet) once they had a border; a 1-pixel border in the chip's own background colour gives the rounded shape without a visible outline.
+- Observation: in scripted runs that rename or move a note right after opening the workspace, the background full-text indexer (`Indexer` thread in `main.py`, started by `_start_fulltext_indexing`) can try to read the note's old path and logs "Could not read note text from …" as a warning. This is a race in the script, not a problem with the header: the indexer catches the error and skips the file, and the app never renames that fast after opening. Wait for indexing to finish in scripts if a clean log matters.
 - Observation: the "+ Folder" text no longer fit next to "+ New note" and the sort button at the default sidebar width; the new-folder button is icon-only (its tooltip and accessible name keep the text) and the default sidebar width is 260 pixels (a saved splitter state still wins).
 
 
@@ -58,6 +64,9 @@ How to see it working: run `python main.py`, open a workspace, open a note. The 
   Date/Author: 2026-10-30 / Claude.
 - Decision: no separate preview background colour; the preview uses `panel_bg` like the editor (pure white in the light theme).
   Rationale: `_preview_theme_assets` is also used for PDF export with the light theme, and a tinted preview background would tint exported PDFs.
+  Date/Author: 2026-10-30 / Claude.
+- Decision: the header refreshes from Qt's `windowTitleChanged` signal plus two explicit calls, instead of a call at each of the ten places that change `current_file`.
+  Rationale: every place that opens, renames, creates or closes a note already updates the window title; only a move (same name, so same title) and a delete of the open note need an explicit refresh (`_update_tracked_paths`, `_remove_tracked_paths`).
   Date/Author: 2026-10-30 / Claude.
 - Decision: each milestone is committed separately, only after the user approves the commit; nothing is pushed without approval.
   Rationale: the user's standing rules (no commit or push without being told each time).
@@ -156,6 +165,18 @@ Every step edits code only; no notes or settings are rewritten except through th
 
 
 ## Artifacts and Notes
+
+Milestone 3 scripted acceptance run (offscreen, copy of the scratch workspace, light theme; `file` is the status and tags read back from the saved archive):
+
+    open            folder='Project 3' title='note 0' pill='Todo' chips=['t3', 'x', '+ tag']
+    pill -> Done    ... pill='Done' ... | file ('done', ['t3', 'x']) | sidebar done
+    type doing      ... pill='Doing' ... | file ('doing', ['t3', 'x'])
+    editing tags    stack shows field: True focus: True
+    added smoke     ... chips=['t3', 'x', 'smoke', '+ tag'] | file ('doing', ['t3', 'x', 'smoke']) | stack back to chips: True
+    renamed         folder='Project 3' title='login flow' ...
+    moved           folder='Project 7' title='login flow' ... | error None
+    new untitled    folder='' title='Untitled' pill='Todo' chips=['+ tag']
+    swedish         folder='' title='Namnlös' pill='Att göra' chips=['+ tagg']
 
 Milestone 2 scripted check (offscreen, no workspace; each line runs the toolbar action on the text "word"):
 
