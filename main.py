@@ -3617,12 +3617,18 @@ class MainWindow(QMainWindow):
         self._save_failure_reported = False
         self.autosave_timer.timeout.connect(self.autosave)
 
+        # A keystroke fires textChanged and cursorPositionChanged; count once after both.
+        self.editor_counts_timer = QTimer(self)
+        self.editor_counts_timer.setSingleShot(True)
+        self.editor_counts_timer.setInterval(0)
+        self.editor_counts_timer.timeout.connect(self._update_editor_counts)
+
         self.editor.textChanged.connect(self.timer.start)
         self.editor.textChanged.connect(self.autosave_timer.start)
-        self.editor.textChanged.connect(self._update_editor_counts)
+        self.editor.textChanged.connect(self.editor_counts_timer.start)
         self.editor.textChanged.connect(self._sync_status_from_editor)
         self.editor.textChanged.connect(self._sync_tags_from_editor)
-        self.editor.cursorPositionChanged.connect(self._update_editor_counts)
+        self.editor.cursorPositionChanged.connect(self.editor_counts_timer.start)
         self.editor.verticalScrollBar().valueChanged.connect(self._sync_preview_scroll)
 
         self.sidebar_search_timer = QTimer(self)
@@ -5452,11 +5458,13 @@ class MainWindow(QMainWindow):
         self.editor._restore_view_state(editor_view_state)
 
     def _update_editor_counts(self):
+        # str.split() drops exactly the characters str.isspace() matches, and runs in C, so this
+        # stays fast on large notes where a per-character loop made every keystroke lag.
         text = self.editor.toPlainText()
-        text_without_whitespace = "".join(ch for ch in text if not ch.isspace())
+        text_without_whitespace = "".join(text.split())
 
         selected_text = self.editor.textCursor().selectedText().replace("\u2029", "\n")
-        selected_without_whitespace = "".join(ch for ch in selected_text if not ch.isspace())
+        selected_without_whitespace = "".join(selected_text.split())
 
         self.editor_count_label.setText(
             self._tr(

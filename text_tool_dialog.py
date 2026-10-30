@@ -5,7 +5,6 @@ import re
 import uuid
 from datetime import date, timedelta
 
-from faker import Faker
 from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtGui import QAction, QFont, QIntValidator
 from PySide6.QtWidgets import (
@@ -837,6 +836,9 @@ class TextToolDialog(QDialog):
     def _faker(self, locale_name):
         faker = self._faker_by_locale.get(locale_name)
         if faker is None:
+            # Imported here: Faker is slow to load and only needed for generated test data.
+            from faker import Faker
+
             faker = Faker(locale_name)
             self._faker_by_locale[locale_name] = faker
         return faker
