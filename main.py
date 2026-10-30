@@ -110,6 +110,7 @@ class SortMode(Enum):
     NAME = "name"
     MODIFIED = "modified"
     CREATED = "created"
+    STATUS = "status"
 
 
 class ViewMode(Enum):
@@ -3433,6 +3434,7 @@ class MainWindow(QMainWindow):
         self.action_sort_name.setText(self._tr("Name (A-Z)"))
         self.action_sort_modified.setText(self._tr("Last Modified"))
         self.action_sort_created.setText(self._tr("Created"))
+        self.action_sort_status.setText(self._tr("Status"))
         self._update_sort_button()
         self.sidebar_search.setPlaceholderText(self._tr("Search Files..."))
         self.find_bar.retranslate_ui()
@@ -3481,22 +3483,27 @@ class MainWindow(QMainWindow):
         self.action_sort_modified.setCheckable(True)
         self.action_sort_created = QAction("Skapad", self)
         self.action_sort_created.setCheckable(True)
+        self.action_sort_status = QAction("Status", self)
+        self.action_sort_status.setCheckable(True)
 
         self.sort_group = QActionGroup(self)
         self.sort_group.addAction(self.action_sort_name)
         self.sort_group.addAction(self.action_sort_modified)
         self.sort_group.addAction(self.action_sort_created)
+        self.sort_group.addAction(self.action_sort_status)
         self.sort_group.setExclusive(True)
 
         self.action_sort_name.setChecked(True)
         sort_menu.addAction(self.action_sort_name)
         sort_menu.addAction(self.action_sort_modified)
         sort_menu.addAction(self.action_sort_created)
+        sort_menu.addAction(self.action_sort_status)
         self.btn_sort.setMenu(sort_menu)
 
         self.action_sort_name.triggered.connect(lambda checked=False: self.set_sort(SortMode.NAME))
         self.action_sort_modified.triggered.connect(lambda checked=False: self.set_sort(SortMode.MODIFIED))
         self.action_sort_created.triggered.connect(lambda checked=False: self.set_sort(SortMode.CREATED))
+        self.action_sort_status.triggered.connect(lambda checked=False: self.set_sort(SortMode.STATUS))
 
         btn_row.addWidget(self.btn_new_file)
         btn_row.addWidget(self.btn_new_folder)
@@ -3838,6 +3845,10 @@ class MainWindow(QMainWindow):
             sort_column = 3
             sort_order = Qt.SortOrder.AscendingOrder
             self.action_sort_modified.setChecked(True)
+        elif mode == SortMode.STATUS:
+            sort_column = 0
+            sort_order = Qt.SortOrder.AscendingOrder
+            self.action_sort_status.setChecked(True)
         else:
             sort_column = 0
             sort_order = Qt.SortOrder.AscendingOrder
@@ -3850,12 +3861,15 @@ class MainWindow(QMainWindow):
 
     def _update_sort_button(self):
         if self.sort_mode == SortMode.MODIFIED:
-            self.btn_sort.setText("Ny-Gl")
+            self.btn_sort.setText(self._tr("New-Old"))
             return
         if self.sort_mode == SortMode.CREATED:
-            self.btn_sort.setText("Skap")
+            self.btn_sort.setText(self._tr("Created"))
             return
-        self.btn_sort.setText("A-Z")
+        if self.sort_mode == SortMode.STATUS:
+            self.btn_sort.setText(self._tr("Status"))
+            return
+        self.btn_sort.setText(self._tr("A-Z"))
 
     def _schedule_sidebar_search(self, text):
         self.sidebar_search_timer.start()

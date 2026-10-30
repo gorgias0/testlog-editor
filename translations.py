@@ -82,6 +82,8 @@ TRANSLATIONS = {
         "Name (A-Z)": "Namn (A-Ö)",
         "Last Modified": "Senast ändrad",
         "Created": "Skapad",
+        "New-Old": "Ny-Gl",
+        "A-Z": "A-Ö",
         "Write Markdown here...": "Skriv Markdown här...",
         "Workspace opened: {path}": "Arbetsyta öppnad: {path}",
         "Select workspace": "Välj arbetsyta",

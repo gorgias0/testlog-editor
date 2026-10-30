@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QFileSystemModel
 from archive_folder import ARCHIVE_DIR_NAME
 from testlog_utils import (
     TESTLOG_STATUS_LABELS,
+    TESTLOG_STATUS_SORT_ORDER,
     format_testlog_tags,
     normalize_testlog_tags,
     read_testlog_header_from_archive,
@@ -205,6 +206,23 @@ class WorkspaceSortProxyModel(QSortFilterProxyModel):
             return left_rank < right_rank
 
         if self.sort_mode == "name":
+            left_name = Path(left_path).stem if left_path.endswith(".testlog") else self._source_model.fileName(left)
+            right_name = Path(right_path).stem if right_path.endswith(".testlog") else self._source_model.fileName(right)
+            return left_name.lower() < right_name.lower()
+
+        if self.sort_mode == "status":
+            # Folders have no status and their modified time says little about the notes in them.
+            if not left_is_dir:
+                # Files that are not notes have no status and go after every note.
+                unknown = len(TESTLOG_STATUS_SORT_ORDER)
+                left_status = TESTLOG_STATUS_SORT_ORDER.get(self._source_model.data(left, TESTLOG_STATUS_ROLE), unknown)
+                right_status = TESTLOG_STATUS_SORT_ORDER.get(self._source_model.data(right, TESTLOG_STATUS_ROLE), unknown)
+                if left_status != right_status:
+                    return left_status < right_status
+                left_timestamp = self._timestamp(left_path, "modified")
+                right_timestamp = self._timestamp(right_path, "modified")
+                if left_timestamp != right_timestamp:
+                    return left_timestamp > right_timestamp
             left_name = Path(left_path).stem if left_path.endswith(".testlog") else self._source_model.fileName(left)
             right_name = Path(right_path).stem if right_path.endswith(".testlog") else self._source_model.fileName(right)
             return left_name.lower() < right_name.lower()

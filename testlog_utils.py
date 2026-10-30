@@ -13,6 +13,8 @@ TESTLOG_STATUS_LABELS = {
     "doing": "Doing",
     "done": "Done",
 }
+# Status sort: work in progress first, then what is still to do, finished notes last.
+TESTLOG_STATUS_SORT_ORDER = {"doing": 0, "todo": 1, "done": 2}
 IMAGE_REFERENCE_PATTERN = re.compile(r'!\[.*?\]\(images/([^)]+)\)')
 HEADING_PATTERN = re.compile(r'^#+\s+(.+)$', re.MULTILINE)
 CHECKBOX_PATTERN = re.compile(r"^\s*([☐☑☒])\s+(.*)$")
