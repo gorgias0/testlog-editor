@@ -18,8 +18,9 @@ How to see it working: run `python main.py`, open a workspace, open a note. The 
 
 - [x] (2026-10-30) Plan written; mockups agreed (direction A, light and dark).
 - [x] (2026-10-30) Milestone 1: new palette keys and values (light and dark); sidebar on its own background with rounded controls, an accent "+ New note" button and an icon-only new-folder button; 28-pixel tree rows with a full-row highlight and no dotted focus frame; flat `{stroke}` line icons (`themed_icon`) re-rendered on theme change; status dots themed in the tree and the recent-files switcher; editor without a box border and with left/top padding; status bar "N characters · N without spaces" plus the selected counts while text is selected (`format_editor_counts`, 3 tests). 227 passed. Screenshots in both themes and a scripted check of live theme switching and the counts (see `Artifacts and Notes`).
-- [ ] Milestone 1 commit (waiting for the user's approval) and Windows build for the user.
-- [ ] Milestone 2: compact toolbar (icon buttons, Heading drop-down, checklist button, Edit/Split/Preview switch).
+- [x] (2026-10-30) Milestone 1 committed; Windows build installed for the user.
+- [x] (2026-10-30) Milestone 2: icon-only formatting buttons with themed `{stroke}` icons (`_apply_toolbar_icons`); one "Heading" button whose menu lists Heading 1–4 with their shortcuts; new checklist button (`- [ ] `); Text Tool and Diff on the right as outlined icon-plus-text buttons; Edit / Split / Preview switch (`set_view`, `_sync_view_switch`) replacing `toggle_btn`, `_update_toggle_icon`, `_preview_toggle_button_stylesheet` and the two old toggle SVGs; six unused translation keys removed. 227 passed. Scripted check of every toolbar action and of the switch against Ctrl+E, View > Split View and a restart (see `Artifacts and Notes`).
+- [ ] Milestone 2 commit (waiting for the user's approval) and Windows build for the user.
 - [ ] Milestone 3: note header bar (folder, name, status pill, tag chips).
 - [ ] Milestone 4 (optional, prototyping): setting to hide the front-matter lines in the editor.
 - [ ] Milestone 5: documentation (`README.md`, `AGENTS.md`), full test run, Windows build handed to the user, retrospective.
@@ -33,6 +34,8 @@ How to see it working: run `python main.py`, open a workspace, open a note. The 
   Evidence: screenshot with `padding: 14px 20px 0 24px` showed the gap; `padding: 10px 0 0 20px` does not.
 - Observation: the status bar counts never listened to `selectionChanged`, so clearing a selection without moving the cursor left stale selected numbers; harmless before, visible now that the selected part only appears while text is selected. `selectionChanged` now also starts the counts timer.
   Evidence: scripted check printed "… · 12 selected (10 without spaces)" after `clearSelection()` before the fix and the totals only after it.
+- Observation: `QWidget.isVisible()` is false for every widget until the window is shown, so code that decides the current view during start-up must use `isHidden()`; `set_view` and `_sync_view_switch` do. (`toggle_editor_preview` still uses `isVisible()`, which is fine because it only runs after the window is shown.)
+- Observation: scripted checks that close the window with an untitled note containing text block on the "Save changes before leaving this file?" message box; replace `QMessageBox.question` (and its siblings) in the script with a function that returns `Discard`, and run Python with `-u` and `timeout` so output is not lost if something blocks.
 - Observation: the "+ Folder" text no longer fit next to "+ New note" and the sort button at the default sidebar width; the new-folder button is icon-only (its tooltip and accessible name keep the text) and the default sidebar width is 260 pixels (a saved splitter state still wins).
 
 
@@ -153,6 +156,20 @@ Every step edits code only; no notes or settings are rewritten except through th
 
 
 ## Artifacts and Notes
+
+Milestone 2 scripted check (offscreen, no workspace; each line runs the toolbar action on the text "word"):
+
+    bold       -> '**word**'          h1 -> '# word'      bullet    -> '- word'
+    italic     -> '*word*'            h4 -> '#### word'   numbered  -> '1. word'
+    underline  -> '<u>word</u>'                           checklist -> '- [ ] word'
+    heading menu: ['Heading 1\tCtrl+1', 'Heading 2\tCtrl+2', 'Heading 3\tCtrl+3', 'Heading 4\tCtrl+4']
+    start           mode=single editor=shown preview=hidden switch=['edit'] menuSplit=False
+    click Preview   mode=single editor=hidden preview=shown switch=['preview'] menuSplit=False
+    Ctrl+E          mode=single editor=shown preview=hidden switch=['edit'] menuSplit=False
+    click Split     mode=split editor=shown preview=shown switch=['split'] menuSplit=True
+    View>Split off  mode=single editor=shown preview=hidden switch=['edit'] menuSplit=False
+    after restart   mode=split editor=shown preview=shown switch=['split'] menuSplit=True
+    swedish: Rubrik ['Redigera', 'Delad', 'Förhandsgranska'] Checklista
 
 Milestone 1 scripted check (offscreen, scratch workspace, light theme then `_set_theme_mode("dark")`):
 

@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QStyle, QSizePolicy, QToolButton,
     QDialog, QDialogButtonBox, QFormLayout, QCheckBox,
     QListWidget, QListWidgetItem, QGraphicsDropShadowEffect,
-    QStyledItemDelegate, QStyleOptionViewItem, QCompleter, QAbstractItemView,
+    QStyledItemDelegate, QStyleOptionViewItem, QCompleter, QAbstractItemView, QButtonGroup,
 )
 from PySide6.QtCore import Qt, QTimer, QDir, QMarginsF, QUrl, QSettings, QDate, QTime, QObject, Slot, Signal, QItemSelectionModel, QSize, QPoint, QFileInfo, QRect, QStringListModel
 from PySide6.QtGui import QImage, QAction, QActionGroup, QPageLayout, QPageSize, QFont, QFontDatabase, QKeySequence, QTextCursor, QTextBlockFormat, QIntValidator, QShortcut, QColor, QTextCharFormat, QSyntaxHighlighter, QDesktopServices, QPainter, QPalette, QIcon
@@ -37,6 +37,15 @@ from markdown_it import MarkdownIt
 from styles import PREVIEW_STYLE
 from icons import (
     APP_ICON_SVG,
+    BOLD_LINE_SVG,
+    BULLET_LIST_LINE_SVG,
+    CHECKLIST_LINE_SVG,
+    DIFF_LINE_SVG,
+    HORIZONTAL_RULE_LINE_SVG,
+    ITALIC_LINE_SVG,
+    NUMBERED_LIST_LINE_SVG,
+    TEXT_TOOL_LINE_SVG,
+    UNDERLINE_LINE_SVG,
     FOLDER_ADD_LINE_SVG,
     FOLDER_LINE_SVG,
     FOLDER_PINNED_LINE_SVG,
@@ -146,16 +155,6 @@ INDENT_STYLE_TEXT = {
 EDITOR_LINE_HEIGHT_PERCENT = 115
 EDITOR_LINE_HEIGHT_TYPE = QTextBlockFormat.LineHeightTypes.ProportionalHeight.value
 
-
-EDITOR_ON_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 52">
-  <rect x="0" y="0" width="72" height="52" rx="6" fill="#555"/>
-  <text x="36" y="35" text-anchor="middle" font-family="monospace" font-size="18" font-weight="bold" fill="white">&lt;/&gt;</text>
-</svg>'''
-
-EDITOR_OFF_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 52">
-  <rect x="0" y="0" width="72" height="52" rx="6" fill="none" stroke="#aaa" stroke-width="2"/>
-  <text x="36" y="35" text-anchor="middle" font-family="monospace" font-size="18" font-weight="bold" fill="#aaa">&lt;/&gt;</text>
-</svg>'''
 
 class Editor(QTextEdit):
     def __init__(
@@ -2476,21 +2475,66 @@ class MainWindow(QMainWindow):
         palette = self._theme_palette(theme_mode=theme_mode)
         return f"""
             QToolBar {{
-                spacing: 4px;
-                padding: 4px;
+                spacing: 2px;
+                padding: 5px 8px;
                 background: {palette["chrome_bg"]};
                 border: none;
+                border-bottom: 1px solid {palette["panel_border"]};
             }}
             QToolButton {{
-                min-width: 34px;
+                min-width: 30px;
                 min-height: 30px;
+                padding: 2px 6px;
+                border: none;
+                border-radius: 6px;
+                background: transparent;
+                color: {palette["text"]};
                 font-size: 13px;
-                padding: 4px 8px;
+            }}
+            QToolButton:hover {{
+                background: {palette["chrome_hover"]};
+            }}
+            QToolButton#headingButton {{
+                font-weight: 600;
+                padding-right: 18px;
+            }}
+            QToolButton#headingButton::menu-indicator {{
+                subcontrol-origin: padding;
+                subcontrol-position: right center;
+                right: 4px;
+            }}
+            QToolButton#labelledToolButton {{
+                background: {palette["control_bg"]};
+                border: 1px solid {palette["control_border"]};
+                min-height: 0;
+                padding: 0 10px;
+                margin-left: 4px;
+            }}
+            QToolButton#labelledToolButton:hover {{
+                background: {palette["chrome_hover"]};
+            }}
+            QWidget#viewSwitch {{
+                background: {palette["chrome_hover"]};
+                border-radius: 7px;
+                margin-left: 8px;
+            }}
+            QWidget#viewSwitch QToolButton {{
+                min-width: 0;
+                min-height: 0;
+                padding: 2px 10px;
+                border-radius: 5px;
+                color: {palette["muted_text"]};
+                font-size: 12px;
+            }}
+            QWidget#viewSwitch QToolButton:checked {{
+                background: {palette["panel_bg"]};
+                color: {palette["text"]};
+                font-weight: 600;
             }}
             QToolBar::separator {{
                 background: {palette["panel_border"]};
                 width: 1px;
-                margin: 4px 8px;
+                margin: 6px 8px;
             }}
         """
 
@@ -2508,25 +2552,6 @@ class MainWindow(QMainWindow):
             settings.setUnknownUrlSchemePolicy(
                 QWebEngineSettings.UnknownUrlSchemePolicy.DisallowUnknownUrlSchemes
             )
-
-    def _preview_toggle_button_stylesheet(self, theme_mode=None):
-        palette = self._theme_palette(theme_mode=theme_mode)
-        return f"""
-            QToolButton {{
-                background: {palette["chrome_bg"]};
-                color: {palette["text"]};
-                border: 1px solid {palette["panel_border"]};
-                border-radius: 4px;
-                padding: 2px;
-            }}
-            QToolButton:hover {{
-                background: {palette["chrome_hover"]};
-            }}
-            QToolButton:checked {{
-                background: {palette["copy_button_bg"]};
-                border-color: {palette["copy_button_border"]};
-            }}
-        """
 
     def _sanitize_preview_url(self, value, attribute_name):
         # Network paths (//host/x or \\host\x) would make Windows contact a share and send the user's login.
@@ -2847,8 +2872,8 @@ class MainWindow(QMainWindow):
                 f"background: {palette['panel_bg']}; border: none; border-left: 1px solid {palette['panel_border']};"
             )
             self.preview.page().setBackgroundColor(QColor(palette["panel_bg"]))
-        if hasattr(self, "toggle_btn"):
-            self.toggle_btn.setStyleSheet(self._preview_toggle_button_stylesheet())
+        if hasattr(self, "toolbar_bold_action"):
+            self._apply_toolbar_icons()
         if hasattr(self, "toolbar"):
             self.toolbar.setStyleSheet(self._toolbar_stylesheet())
         if hasattr(self, "editor_highlighter"):
@@ -2857,6 +2882,22 @@ class MainWindow(QMainWindow):
             self.fulltext_search_dialog.apply_theme(palette, self.theme_mode)
         if self.recent_files_switcher is not None:
             self.recent_files_switcher.apply_theme(palette, self.theme_mode)
+
+    def _apply_toolbar_icons(self):
+        color = self._theme_palette()["text"]
+        icons = {
+            self.toolbar_bold_action: BOLD_LINE_SVG,
+            self.toolbar_italic_action: ITALIC_LINE_SVG,
+            self.toolbar_underline_action: UNDERLINE_LINE_SVG,
+            self.toolbar_bullet_action: BULLET_LIST_LINE_SVG,
+            self.toolbar_numbered_action: NUMBERED_LIST_LINE_SVG,
+            self.toolbar_checklist_action: CHECKLIST_LINE_SVG,
+            self.toolbar_hr_action: HORIZONTAL_RULE_LINE_SVG,
+            self.toolbar_text_tool_action: TEXT_TOOL_LINE_SVG,
+            self.toolbar_diff_action: DIFF_LINE_SVG,
+        }
+        for action, svg in icons.items():
+            action.setIcon(themed_icon(svg, color, size=36))
 
     def _apply_tree_icons(self):
         palette = self._theme_palette()
@@ -3247,6 +3288,9 @@ class MainWindow(QMainWindow):
         self.toolbar.setStyleSheet(self._toolbar_stylesheet())
         self.addToolBar(self.toolbar)
 
+        self.toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.toolbar.setIconSize(QSize(18, 18))
+
         self.toolbar_bold_action = QAction(self)
         self.toolbar_bold_action.triggered.connect(self.editor.format_bold)
         self.toolbar.addAction(self.toolbar_bold_action)
@@ -3259,21 +3303,26 @@ class MainWindow(QMainWindow):
         self.toolbar_underline_action.triggered.connect(self.editor.format_underline)
         self.toolbar.addAction(self.toolbar_underline_action)
 
+        self.toolbar.addSeparator()
+
+        # One "Heading" button whose menu holds the four heading levels.
         self.toolbar_h1_action = QAction(self)
         self.toolbar_h1_action.triggered.connect(lambda: self._insert_line_prefix("# "))
-        self.toolbar.addAction(self.toolbar_h1_action)
-
         self.toolbar_h2_action = QAction(self)
         self.toolbar_h2_action.triggered.connect(lambda: self._insert_line_prefix("## "))
-        self.toolbar.addAction(self.toolbar_h2_action)
-
         self.toolbar_h3_action = QAction(self)
         self.toolbar_h3_action.triggered.connect(lambda: self._insert_line_prefix("### "))
-        self.toolbar.addAction(self.toolbar_h3_action)
-
         self.toolbar_h4_action = QAction(self)
         self.toolbar_h4_action.triggered.connect(lambda: self._insert_line_prefix("#### "))
-        self.toolbar.addAction(self.toolbar_h4_action)
+        self.toolbar_heading_button = QToolButton()
+        self.toolbar_heading_button.setObjectName("headingButton")
+        self.toolbar_heading_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.toolbar_heading_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        heading_menu = QMenu(self.toolbar_heading_button)
+        for heading_action in (self.toolbar_h1_action, self.toolbar_h2_action, self.toolbar_h3_action, self.toolbar_h4_action):
+            heading_menu.addAction(heading_action)
+        self.toolbar_heading_button.setMenu(heading_menu)
+        self.toolbar.addWidget(self.toolbar_heading_button)
 
         self.toolbar.addSeparator()
 
@@ -3285,21 +3334,13 @@ class MainWindow(QMainWindow):
         self.toolbar_numbered_action.triggered.connect(lambda: self._insert_line_prefix("1. "))
         self.toolbar.addAction(self.toolbar_numbered_action)
 
-        self.toolbar.addSeparator()
+        self.toolbar_checklist_action = QAction(self)
+        self.toolbar_checklist_action.triggered.connect(lambda: self._insert_line_prefix("- [ ] "))
+        self.toolbar.addAction(self.toolbar_checklist_action)
 
         self.toolbar_hr_action = QAction(self)
         self.toolbar_hr_action.triggered.connect(self._insert_horizontal_rule)
         self.toolbar.addAction(self.toolbar_hr_action)
-
-        self.toolbar.addSeparator()
-
-        self.toolbar_text_tool_action = QAction(self)
-        self.toolbar_text_tool_action.triggered.connect(self.open_text_tool)
-        self.toolbar.addAction(self.toolbar_text_tool_action)
-
-        self.toolbar_diff_action = QAction(self)
-        self.toolbar_diff_action.triggered.connect(self.open_diff_window)
-        self.toolbar.addAction(self.toolbar_diff_action)
 
         self.toolbar.addSeparator()
 
@@ -3326,13 +3367,39 @@ class MainWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.toolbar.addWidget(spacer)
 
-        self.toggle_btn = QToolButton()
-        self.toggle_btn.setIconSize(QSize(32, 24))
-        self.toggle_btn.setFixedSize(44, 32)
-        self.toggle_btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-        self.toggle_btn.setStyleSheet(self._preview_toggle_button_stylesheet())
-        self.toggle_btn.clicked.connect(lambda checked=False: self.toggle_editor_preview())
-        self.toolbar.addWidget(self.toggle_btn)
+        self.toolbar_text_tool_action = QAction(self)
+        self.toolbar_text_tool_action.triggered.connect(self.open_text_tool)
+        self.toolbar.addAction(self.toolbar_text_tool_action)
+
+        self.toolbar_diff_action = QAction(self)
+        self.toolbar_diff_action.triggered.connect(self.open_diff_window)
+        self.toolbar.addAction(self.toolbar_diff_action)
+        for action in (self.toolbar_text_tool_action, self.toolbar_diff_action):
+            button = self.toolbar.widgetForAction(action)
+            button.setObjectName("labelledToolButton")
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            button.setFixedHeight(30)
+
+        # Edit / Split / Preview switch; set_view applies a choice, _sync_view_switch follows
+        # changes made elsewhere (Ctrl+E, F11, View > Split View).
+        self.view_switch = QWidget()
+        self.view_switch.setObjectName("viewSwitch")
+        view_switch_layout = QHBoxLayout(self.view_switch)
+        view_switch_layout.setContentsMargins(2, 2, 2, 2)
+        view_switch_layout.setSpacing(2)
+        self.view_switch_group = QButtonGroup(self)
+        self.view_switch_group.setExclusive(True)
+        self.view_switch_buttons = {}
+        for view_name in ("edit", "split", "preview"):
+            button = QToolButton()
+            button.setCheckable(True)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            button.setFixedHeight(26)
+            button.clicked.connect(lambda checked=False, name=view_name: self.set_view(name))
+            self.view_switch_group.addButton(button)
+            view_switch_layout.addWidget(button)
+            self.view_switch_buttons[view_name] = button
+        self.toolbar.addWidget(self.view_switch)
 
         self.editor_preview_shortcut = QShortcut(QKeySequence("Ctrl+E"), self)
         self.editor_preview_shortcut.activated.connect(self.toggle_editor_preview)
@@ -3541,25 +3608,26 @@ class MainWindow(QMainWindow):
         self.swedish_action.setChecked(self.current_language == "sv")
 
         self.toolbar.setWindowTitle(self._tr("Formatting"))
-        self.toolbar_bold_action.setText("B")
+        self.toolbar_bold_action.setText(self._tr("Bold (Ctrl+B)"))
         self.toolbar_bold_action.setToolTip(self._tr("Bold (Ctrl+B)"))
-        self.toolbar_italic_action.setText("I")
+        self.toolbar_italic_action.setText(self._tr("Italic (Ctrl+I)"))
         self.toolbar_italic_action.setToolTip(self._tr("Italic (Ctrl+I)"))
-        self.toolbar_underline_action.setText("U")
+        self.toolbar_underline_action.setText(self._tr("Underline tooltip"))
         self.toolbar_underline_action.setToolTip(self._tr("Underline tooltip"))
-        self.toolbar_h1_action.setText("H1")
-        self.toolbar_h1_action.setToolTip(self._tr("Heading 1 (Ctrl+1)"))
-        self.toolbar_h2_action.setText("H2")
-        self.toolbar_h2_action.setToolTip(self._tr("Heading 2 (Ctrl+2)"))
-        self.toolbar_h3_action.setText("H3")
-        self.toolbar_h3_action.setToolTip(self._tr("Heading 3 (Ctrl+3)"))
-        self.toolbar_h4_action.setText("H4")
-        self.toolbar_h4_action.setToolTip(self._tr("Heading 4 (Ctrl+4)"))
-        self.toolbar_bullet_action.setText("UL")
+        # A tab in a menu item's text shows the rest right-aligned, where menus show shortcuts.
+        self.toolbar_h1_action.setText(self._tr("Heading 1") + "\tCtrl+1")
+        self.toolbar_h2_action.setText(self._tr("Heading 2") + "\tCtrl+2")
+        self.toolbar_h3_action.setText(self._tr("Heading 3") + "\tCtrl+3")
+        self.toolbar_h4_action.setText(self._tr("Heading 4") + "\tCtrl+4")
+        self.toolbar_heading_button.setText(self._tr("Heading"))
+        self.toolbar_heading_button.setToolTip(self._tr("Heading (Ctrl+1 to Ctrl+4)"))
+        self.toolbar_bullet_action.setText(self._tr("Bullet List"))
         self.toolbar_bullet_action.setToolTip(self._tr("Bullet List"))
-        self.toolbar_numbered_action.setText("1.")
+        self.toolbar_numbered_action.setText(self._tr("Numbered List"))
         self.toolbar_numbered_action.setToolTip(self._tr("Numbered List"))
-        self.toolbar_hr_action.setText("─")
+        self.toolbar_checklist_action.setText(self._tr("Checklist"))
+        self.toolbar_checklist_action.setToolTip(self._tr("Checklist"))
+        self.toolbar_hr_action.setText(self._tr("Horizontal Rule"))
         self.toolbar_hr_action.setToolTip(self._tr("Horizontal Rule"))
         self.toolbar_text_tool_action.setText(self._tr("Text Tool"))
         self.toolbar_text_tool_action.setToolTip(self._tr("Text Tool"))
@@ -3569,7 +3637,14 @@ class MainWindow(QMainWindow):
             status = self.status_combo.itemData(index)
             self.status_combo.setItemText(index, self._tr(TESTLOG_STATUS_LABELS[status]))
         self.status_combo.setToolTip(self._tr("Status"))
-        self.toggle_btn.setToolTip(self._tr("Toggle editor/preview (Ctrl+E or F11)"))
+        view_labels = {
+            "edit": (self._tr("Edit"), self._tr("Editor only (Ctrl+E or F11 switches)")),
+            "split": (self._tr("Split"), self._tr("Editor and preview side by side (Ctrl+Shift+E)")),
+            "preview": (self._tr("Preview"), self._tr("Preview only (Ctrl+E or F11 switches)")),
+        }
+        for view_name, (label, tooltip) in view_labels.items():
+            self.view_switch_buttons[view_name].setText(label)
+            self.view_switch_buttons[view_name].setToolTip(tooltip)
 
         self.btn_new_file.setText(self._tr("+ New note"))
         self.btn_new_folder.setAccessibleName(self._tr("+ Folder"))
@@ -3821,18 +3896,16 @@ class MainWindow(QMainWindow):
             self.toolbar.widgetForAction(self.toolbar_bold_action),
             self.toolbar.widgetForAction(self.toolbar_italic_action),
             self.toolbar.widgetForAction(self.toolbar_underline_action),
-            self.toolbar.widgetForAction(self.toolbar_h1_action),
-            self.toolbar.widgetForAction(self.toolbar_h2_action),
-            self.toolbar.widgetForAction(self.toolbar_h3_action),
-            self.toolbar.widgetForAction(self.toolbar_h4_action),
+            self.toolbar_heading_button,
             self.toolbar.widgetForAction(self.toolbar_bullet_action),
             self.toolbar.widgetForAction(self.toolbar_numbered_action),
+            self.toolbar.widgetForAction(self.toolbar_checklist_action),
             self.toolbar.widgetForAction(self.toolbar_hr_action),
-            self.toolbar.widgetForAction(self.toolbar_text_tool_action),
-            self.toolbar.widgetForAction(self.toolbar_diff_action),
             self.status_combo,
             self.tags_edit,
-            self.toggle_btn,
+            self.toolbar.widgetForAction(self.toolbar_text_tool_action),
+            self.toolbar.widgetForAction(self.toolbar_diff_action),
+            *self.view_switch_buttons.values(),
         ]
         focus_chain = [self.menuBar()] + [widget for widget in toolbar_widgets if widget is not None]
         for widget in focus_chain:
@@ -4110,7 +4183,7 @@ class MainWindow(QMainWindow):
             self.editor_panel.setVisible(True)
             self.preview.setVisible(False)
             self.editor.setFocus(Qt.FocusReason.ShortcutFocusReason)
-        self._update_toggle_icon()
+        self._sync_view_switch()
 
     def set_split_mode(self, enabled):
         if enabled:
@@ -4124,7 +4197,6 @@ class MainWindow(QMainWindow):
                 total = self.inner_splitter.width()
                 half = max(1, total // 2)
                 self.inner_splitter.setSizes([half, half])
-            self.toggle_btn.setVisible(False)
             self.update_preview()
         else:
             if self.view_mode == ViewMode.SPLIT:
@@ -4132,17 +4204,30 @@ class MainWindow(QMainWindow):
             self.view_mode = ViewMode.SINGLE
             self.editor_panel.setVisible(True)
             self.preview.setVisible(False)
-            self.toggle_btn.setVisible(True)
-            self._update_toggle_icon()
         if self.action_split_view.isChecked() != enabled:
             self.action_split_view.setChecked(enabled)
         self.settings.setValue("view_mode", self.view_mode.value)
+        self._sync_view_switch()
 
-    def _update_toggle_icon(self):
-        if self.editor_panel.isVisible():
-            self.toggle_btn.setIcon(icon_from_svg(EDITOR_ON_ICON_SVG, size=32))
+    def set_view(self, name):
+        if name == "split":
+            self.set_split_mode(True)
             return
-        self.toggle_btn.setIcon(icon_from_svg(EDITOR_OFF_ICON_SVG, size=32))
+        if self.view_mode == ViewMode.SPLIT:
+            self.set_split_mode(False)
+        # isHidden, not isVisible: this also runs before the window is shown.
+        if (name == "preview") != self.editor_panel.isHidden():
+            self.toggle_editor_preview()
+        self._sync_view_switch()
+
+    def _sync_view_switch(self):
+        if not hasattr(self, "view_switch_buttons"):
+            return
+        if self.view_mode == ViewMode.SPLIT:
+            current = "split"
+        else:
+            current = "preview" if self.editor_panel.isHidden() else "edit"
+        self.view_switch_buttons[current].setChecked(True)
 
     def _editor_selected_or_all_text(self):
         cursor = self.editor.textCursor()

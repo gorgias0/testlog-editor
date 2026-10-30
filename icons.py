@@ -85,6 +85,50 @@ TRASH_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
   <path d="M2.5 4h11M6 4V2.5h4V4M3.5 4l.8 9.5h7.4l.8-9.5M6.5 6.5v4.5M9.5 6.5v4.5" fill="none" stroke="{stroke}" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>'''
 
+# Toolbar icons, same {stroke} template form as the tree icons.
+BOLD_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <path d="M4.5 2.5h4.25a2.75 2.75 0 010 5.5H4.5zM4.5 8h5a2.75 2.75 0 010 5.5h-5z" fill="none" stroke="{stroke}" stroke-width="1.8" stroke-linejoin="round"/>
+</svg>'''
+
+ITALIC_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <path d="M7 2.5h5M4 13.5h5M10 2.5l-4 11" fill="none" stroke="{stroke}" stroke-width="1.4" stroke-linecap="round"/>
+</svg>'''
+
+UNDERLINE_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <path d="M4.5 2.5v5a3.5 3.5 0 007 0v-5M3.5 14h9" fill="none" stroke="{stroke}" stroke-width="1.4" stroke-linecap="round"/>
+</svg>'''
+
+BULLET_LIST_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <circle cx="3" cy="4" r="1" fill="{stroke}"/><circle cx="3" cy="8" r="1" fill="{stroke}"/><circle cx="3" cy="12" r="1" fill="{stroke}"/>
+  <path d="M6.5 4h7M6.5 8h7M6.5 12h7" fill="none" stroke="{stroke}" stroke-width="1.4" stroke-linecap="round"/>
+</svg>'''
+
+NUMBERED_LIST_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <path d="M2.5 2.5h1v3.5M2.5 6h2M2.2 9.6c.4-.6 1.9-.6 1.9.3 0 .8-1.9 1.4-1.9 2.1h2M6.5 4h7M6.5 8h7M6.5 12h7" fill="none" stroke="{stroke}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>'''
+
+CHECKLIST_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <rect x="1.5" y="2.5" width="4" height="4" rx="1" fill="none" stroke="{stroke}" stroke-width="1.3"/>
+  <path d="M2.5 4.6l.9.9 1.4-1.7" fill="none" stroke="{stroke}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="1.5" y="9.5" width="4" height="4" rx="1" fill="none" stroke="{stroke}" stroke-width="1.3"/>
+  <path d="M8 4.5h6M8 11.5h6" fill="none" stroke="{stroke}" stroke-width="1.4" stroke-linecap="round"/>
+</svg>'''
+
+HORIZONTAL_RULE_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <path d="M2 8h12" fill="none" stroke="{stroke}" stroke-width="1.5" stroke-linecap="round"/>
+</svg>'''
+
+TEXT_TOOL_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <path d="M3 3.5h10M3 7h10M3 10.5h6" fill="none" stroke="{stroke}" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M12 9.5l1.5 1.5-3 3H9v-1.5z" fill="none" stroke="{stroke}" stroke-width="1.2" stroke-linejoin="round"/>
+</svg>'''
+
+DIFF_LINE_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <rect x="1.5" y="2.5" width="5.5" height="11" rx="1" fill="none" stroke="{stroke}" stroke-width="1.3"/>
+  <rect x="9" y="2.5" width="5.5" height="11" rx="1" fill="none" stroke="{stroke}" stroke-width="1.3"/>
+  <path d="M3 6h2.5M10.5 6h2.5M10.5 9h2.5" fill="none" stroke="{stroke}" stroke-width="1.2" stroke-linecap="round"/>
+</svg>'''
+
 
 def themed_icon(svg_template, color, size=20, accent="#2563eb"):
     return icon_from_svg(svg_template.replace("{stroke}", color).replace("{accent}", accent), size=size)
